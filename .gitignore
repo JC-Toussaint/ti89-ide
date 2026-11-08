@@ -1,0 +1,25 @@
+# TI ROM images and emulator states belong to Texas Instruments: never commit them
+/ROM/
+*.rom
+*.sav
+*.img
+*.tib
+
+# Third-party tools and documents (rebuilt by scripts/build_gcc4ti.sh)
+/gcc4ti/
+/gcc4ti-src/
+/tigccsrc/
+/Doc/
+
+# Build outputs
+*.89z
+*.89p
+*.9xz
+*.v2z
+*.dbg
+*.lst
+*.o
+*.so
+*.log
+__pycache__/
+.venv/

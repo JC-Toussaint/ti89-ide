@@ -1,0 +1,3 @@
+[submodule "emu89/musashi"]
+	path = emu89/musashi
+	url = https://github.com/kstenerud/Musashi.git
