@@ -217,8 +217,12 @@ class AsmVariableReader:
             if None in raw:
                 out.append(VarNode(item.name, tname, f"${addr:06X} ‹not readable›", path, error=True))
                 continue
-            if item.is_string and item.size == 1:
-                txt = bytes(raw).split(b"\0")[0].decode("latin-1")
+            text = bytes(raw).split(b"\0")[0] if item.size == 1 else b""
+            looks_text = (item.size == 1 and item.count > 1 and len(text) >= 2
+                          and len(text) < len(raw) and all(32 <= c < 127 for c in text))
+            if item.size == 1 and (item.is_string or looks_text):
+                # Chaîne déclarée, ou tableau d'octets qui contient du texte (tampon...)
+                txt = text.decode("latin-1")
                 value = f'"{txt}"   @ ${addr:06X}'
             elif item.count == 1:
                 value = self._elem(raw, item.size) + f"   @ ${addr:06X}"
