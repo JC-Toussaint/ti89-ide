@@ -21,7 +21,9 @@ emulator, debug it at source level, and send it to the real calculator over USB.
   - **C variables** (locals, parameters, globals, statics) with their types: integers,
     chars, enums, TI floats, pointers, strings, arrays, structs;
   - **memory view** (hex dump, follow a register, edit RAM bytes);
-  - assembly: step by instruction, step over `jsr`/`bsr` and AMS ROM calls.
+  - assembly: step by instruction, step over `jsr`/`bsr` and AMS ROM calls; the
+    Variables tab shows labelled data (`dc.b`/`dc.w`/`ds`, `.byte`/`.word`/`.asciz`...)
+    read from memory, and the `equ` constants.
 - **Send to the real TI-89 Titanium** over the direct USB cable (libticalcs, usbipd on WSL).
 - Examples in `projets/exemples/`: graphics, grayscale, and a small sprite game.
 

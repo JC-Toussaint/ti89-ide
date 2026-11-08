@@ -21,6 +21,7 @@ sys.path.insert(0, EMU_DIR)
 from ti89emu.session import Session, LoadError          # noqa: E402
 from ti89emu.debugger import Debugger, IDLE, STARTING, RUNNING, PAUSED   # noqa: E402
 from ti89emu.variables import VariableReader                            # noqa: E402
+from ti89emu.asmvars import AsmVariableReader                           # noqa: E402
 from ti89emu import dbginfo                                             # noqa: E402
 from ti89emu.keyfeed import CHAR_MAP, KEYSYM_MAP          # noqa: E402
 
@@ -272,7 +273,7 @@ class IdeApp:
         self.vars.bind("<<TreeviewOpen>>", self._on_var_open)
         self.vars.bind("<<TreeviewClose>>", self._on_var_close)
         self.var_kids = {}          # iid -> fonction qui produit les enfants
-        self.var_expanded = {"L", "G"}
+        self.var_expanded = {"L", "G", "C"}
         self.prev_vals = {}
         self.var_reader = None
         bottom.add(vf, text="Variables")
@@ -733,7 +734,14 @@ class IdeApp:
         self.running = name
         self.prev_regs = {}
         self.prev_vals = {}
-        self.var_reader = None if self.debugger.info.is_asm else VariableReader(self.debugger)
+        if self.debugger.info.is_asm:
+            # Assembleur : données étiquetées et constantes lues dans le source
+            self.var_reader = None
+            self.asm_var_reader = AsmVariableReader(self.debugger, self.editor.get(),
+                                                    language_of(self.path))
+        else:
+            self.var_reader = VariableReader(self.debugger)
+            self.asm_var_reader = None
         self.memview.reset()
         self._update_buttons()
         first = "the first instruction" if self.debugger.info.is_asm else "the first line of _main"
@@ -880,10 +888,24 @@ class IdeApp:
         if clear:
             return
         if self.var_reader is None:
-            if self.debugger.state != IDLE:
-                tv.insert("", "end", text="(assembly)", tags=("group",),
-                          values=("No C variables in assembly: see 68000 Registers and the "
-                                  "Disassembly tab.", ""))
+            ar = getattr(self, "asm_var_reader", None)
+            if ar is None or self.debugger.state == IDLE:
+                return
+            self._new_vals = {}
+            data, consts = ar.data_nodes(), ar.const_nodes()
+            tv.insert("", "end", iid="D", text="Data (labels)", open=True, tags=("group",),
+                      values=("" if data else "no dc / ds / .byte / .word... data in the source", ""))
+            for n in data:
+                self._insert_var("D", n)
+            tv.insert("", "end", iid="C", text="Constants (equ)", open="C" in self.var_expanded,
+                      tags=("group",))
+            for n in consts:
+                self._insert_var("C", n)
+            for iid in sorted(self.var_expanded, key=lambda x: x.count("/")):
+                if tv.exists(iid) and iid not in ("D", "C"):
+                    self._populate(iid)
+                    tv.item(iid, open=True)
+            self.prev_vals.update(self._new_vals)
             return
         self._new_vals = {}
         fn, loc = self.var_reader.locals()
