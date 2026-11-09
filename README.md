@@ -55,7 +55,7 @@ so every run starts from a clean state.
 ```sh
 git clone --recurse-submodules https://github.com/JC-Toussaint/ti89-ide.git
 cd ti89-ide
-scripts/setup.sh            # Python environment, Musashi, emulator C core
+scripts/setup.sh            # Python environment (pyelftools, Pillow), Musashi, C core
 scripts/build_gcc4ti.sh     # builds the GCC4TI toolchain into ./gcc4ti (10-20 min)
 ```
 

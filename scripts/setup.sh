@@ -5,6 +5,6 @@ set -e
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 git -C "$ROOT" submodule update --init
 python3 -m venv "$ROOT/emu89/.venv"
-"$ROOT/emu89/.venv/bin/pip" install --quiet pyelftools
+"$ROOT/emu89/.venv/bin/pip" install --quiet pyelftools pillow
 make -C "$ROOT/emu89/core"
 echo "Done. Next: build GCC4TI (scripts/build_gcc4ti.sh), put your ROM in ROM/, run ./run-ide.sh"

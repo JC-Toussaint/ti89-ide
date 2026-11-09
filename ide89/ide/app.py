@@ -12,6 +12,8 @@ from .build import build
 from .editor import CodeEditor, THEME
 from . import realcalc
 from .memview import MemoryView
+from .icons import make_icon
+from PIL import ImageTk
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 EMU_DIR = os.path.join(REPO_ROOT, "emu89")
@@ -181,14 +183,12 @@ class IdeApp:
                     padding=(8, 4), borderwidth=0, font=("DejaVu Sans", 9, "bold"))
         s.map("Debug.TButton", background=[("active", "#6d28d9"), ("disabled", "#2e3035")],
               foreground=[("disabled", "#6b707a")])
-        s.configure("Icon.TButton", background="#3a3d44", foreground="white", padding=(4, 2),
-                    borderwidth=0, font=("DejaVu Sans", 14), anchor="center")
-        s.map("Icon.TButton", background=[("active", "#50545d"), ("disabled", "#2b2d31")],
-              foreground=[("disabled", "#55585f")])
-        s.configure("IconRun.TButton", background="#2563eb", foreground="white", padding=(4, 2),
-                    borderwidth=0, font=("DejaVu Sans", 14), anchor="center")
-        s.map("IconRun.TButton", background=[("active", "#1d4ed8"), ("disabled", "#2b2d31")],
-              foreground=[("disabled", "#55585f")])
+        s.configure("Icon.TButton", background=UI["bg"], padding=(5, 4), borderwidth=0,
+                    relief="flat", anchor="center")
+        s.map("Icon.TButton", background=[("active", "#3a3d44"), ("disabled", UI["bg"])])
+        s.configure("IconRun.TButton", background=UI["bg"], padding=(1, 0), borderwidth=0,
+                    relief="flat", anchor="center")
+        s.map("IconRun.TButton", background=[("active", UI["bg"]), ("disabled", UI["bg"])])
         s.configure("Panel.TLabelframe", background=UI["panel"], bordercolor="#3a3c42")
         s.configure("Panel.TLabelframe.Label", background=UI["panel"], foreground=UI["muted"],
                     font=("DejaVu Sans", 10, "bold"))
@@ -197,32 +197,60 @@ class IdeApp:
         # Barre d'outils
         bar = tk.Frame(self.root, bg=UI["bg"], pady=6, padx=8)
         bar.pack(fill="x")
-        def btn(icon, tip, cmd, style="Icon.TButton", state="normal", pad=(2, 0)):
-            b = ttk.Button(bar, text=icon, style=style, command=cmd, state=state, width=3)
+        self._icons = []                       # références : Tk oublie sinon les images
+
+        def picture(name, color, size, badge=None):
+            img = ImageTk.PhotoImage(make_icon(name, color, size, badge))
+            self._icons.append(img)
+            return img
+
+        def btn(name, tip, cmd, state="normal", pad=(1, 0), run=False):
+            # Icônes au trait : claire si actif, grisée si désactivé ; « Run » sur fond bleu
+            if run:
+                normal = picture(name, "#ffffff", 30, badge="#2563eb")
+                hover = picture(name, "#ffffff", 30, badge="#1d4ed8")
+                off = picture(name, "#6b707a", 30, badge="#33353b")
+                image = [normal, "disabled", off, "active", hover]
+                style = "IconRun.TButton"
+            else:
+                normal = picture(name, "#e5e7eb", 22)
+                off = picture(name, "#55585f", 22)
+                image = [normal, "disabled", off]
+                style = "Icon.TButton"
+            b = ttk.Button(bar, image=image, style=style, command=cmd, state=state, takefocus=0)
             b.pack(side="left", padx=pad)
             Tooltip(b, tip)
             return b
 
         def sep():
-            tk.Frame(bar, width=1, bg="#4a4d55").pack(side="left", fill="y", padx=8, pady=2)
+            tk.Frame(bar, width=1, bg="#45484f").pack(side="left", fill="y", padx=10, pady=4)
 
         self._build_menu()
-        btn("📄", "New  (Ctrl+N)", self.new_file, pad=(0, 2))
-        btn("📂", "Open…  (Ctrl+O)", self.open_dialog)
-        btn("💾", "Save  (Ctrl+S)", self.save)
+        # Fichiers
+        btn("new", "New  (Ctrl+N)", self.new_file, pad=(0, 1))
+        btn("open", "Open…  (Ctrl+O)", self.open_dialog)
+        btn("save", "Save  (Ctrl+S)", self.save)
         sep()
-        self.btn_build = btn("🔨", "Build  (F7)", self.compile)
-        self.btn_run = btn("▶", "Run in emulator  (F5)", self.run_program, "IconRun.TButton", "disabled")
-        self.btn_debug = btn("🐞", "Debug  (F6)", self.debug_program, state="disabled")
-        self.btn_stop = btn("■", "Stop  (Shift+F5)", self.stop_program, state="disabled")
+        # Construction et exécution
+        self.btn_build = btn("build", "Build  (F7)", self.compile)
+        self.btn_run = btn("run", "Run in emulator  (F5)", self.run_program, "disabled",
+                           pad=(4, 4), run=True)
+        self.btn_debug = btn("debug", "Debug  (F6)", self.debug_program, state="disabled")
+        self.btn_stop = btn("stop", "Stop  (Shift+F5)", self.stop_program, state="disabled")
         sep()
-        self.btn_cont = btn("▷", "Continue  (F5)", lambda: self.dbg_resume("continue"), state="disabled")
-        self.btn_pause = btn("‖", "Pause", self.dbg_pause, state="disabled")
-        self.btn_over = btn("↷", "Step Over  (F10)", lambda: self.dbg_resume("over"), state="disabled")
-        self.btn_into = btn("↓", "Step Into  (F11)", lambda: self.dbg_resume("into"), state="disabled")
-        self.btn_out = btn("↑", "Step Out  (Shift+F11)", lambda: self.dbg_resume("out"), state="disabled")
+        # Contrôle de l'exécution (débogueur)
+        self.btn_cont = btn("continue", "Continue  (F5)", lambda: self.dbg_resume("continue"),
+                            state="disabled")
+        self.btn_pause = btn("pause", "Pause", self.dbg_pause, state="disabled")
+        self.btn_over = btn("step_over", "Step Over  (F10)", lambda: self.dbg_resume("over"),
+                            state="disabled")
+        self.btn_into = btn("step_into", "Step Into  (F11)", lambda: self.dbg_resume("into"),
+                            state="disabled")
+        self.btn_out = btn("step_out", "Step Out  (Shift+F11)", lambda: self.dbg_resume("out"),
+                           state="disabled")
         sep()
-        self.btn_send = btn("📲", "Send to TI-89 via USB  (Ctrl+T)", self.send_to_calc)
+        # Outils
+        self.btn_send = btn("send", "Send to TI-89 via USB  (Ctrl+T)", self.send_to_calc)
 
         # Zone principale : gauche (éditeur + problèmes) / droite (écran, registres, variables)
         main = ttk.Panedwindow(self.root, orient="horizontal")
