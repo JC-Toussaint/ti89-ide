@@ -11,6 +11,7 @@ Les valeurs modifiées depuis la pause précédente sont en jaune.
 import tkinter as tk
 
 COL = {"bg": "#232428", "fg": "#d4d4d4", "muted": "#8b8f98", "changed": "#fbbf24",
+       "bitchanged": "#f87171",
        "sel": "#264f78", "btn": "#2b2d31", "btn_on": "#3b82f6", "ruler": "#5d616b"}
 FONT = ("DejaVu Sans Mono", 9)
 FORMATS = (("hex", "Hex"), ("dec", "Dec"), ("sdec", "±Dec"), ("bin", "Bin"))
@@ -54,6 +55,8 @@ class RegisterView(tk.Frame):
         self.text.pack(fill="x", padx=6)
         self.text.tag_configure("name", foreground=COL["muted"])
         self.text.tag_configure("changed", foreground=COL["changed"])
+        self.text.tag_configure("bitchanged", foreground=COL["bitchanged"])
+        self.text.tag_raise("bitchanged", "changed")
         self.text.tag_configure("selected", background=COL["sel"])
         self.text.bind("<MouseWheel>", lambda e: self.text.yview_scroll(-1 if e.delta > 0 else 1, "units"))
         self.text.bind("<Button-4>", lambda e: self.text.yview_scroll(-1, "units"))
@@ -67,6 +70,8 @@ class RegisterView(tk.Frame):
         self.detail.tag_configure("title", foreground="#93c5fd")
         self.detail.tag_configure("ruler", foreground=COL["ruler"])
         self.detail.tag_configure("changed", foreground=COL["changed"])
+        self.detail.tag_configure("bitchanged", foreground=COL["bitchanged"])
+        self.detail.tag_raise("bitchanged", "changed")
         self.show(None)
 
     # ------------------------------------------------------------ API
@@ -103,9 +108,33 @@ class RegisterView(tk.Frame):
         if name == self.selected:
             tags.append("selected")
         t.insert("end", f"{name:<3}", tuple(["name"] + tags))
-        txt = self._fmt(name, v)
-        t.insert("end", txt.rjust(width) if width and self.fmt.get() != "hex" else txt, tuple(tags))
+        if self.fmt.get() == "bin":
+            bits = {"SR": 16, "PC": 24}.get(name, 32)
+            self._insert_bin(t, v, self.prev.get(name) if self.prev else None, bits, tags)
+        else:
+            txt = self._fmt(name, v)
+            t.insert("end", txt.rjust(width) if width and self.fmt.get() != "hex" else txt,
+                     tuple(tags))
         t.tag_bind(f"reg_{name}", "<Button-1>", lambda e, n=name: self._select(n))
+
+    @staticmethod
+    def _insert_bin(t, v, old, bits, tags):
+        """Écrit v en binaire (groupes de 4) ; les bits différents de `old` sont en
+        rouge. Les bits consécutifs de même couleur sont insérés d'un seul bloc."""
+        v &= (1 << bits) - 1
+        diff = 0 if old is None else (v ^ old) & ((1 << bits) - 1)
+        run, run_red = "", False
+        for i in range(bits - 1, -1, -1):
+            red = bool((diff >> i) & 1)
+            if red != run_red and run:
+                t.insert("end", run, tuple(tags + (["bitchanged"] if run_red else [])))
+                run = ""
+            run_red = red
+            run += "1" if (v >> i) & 1 else "0"
+            if i and i % 4 == 0:
+                run += " "
+        if run:
+            t.insert("end", run, tuple(tags + (["bitchanged"] if run_red else [])))
 
     def _render(self):
         t = self.text
@@ -176,7 +205,8 @@ class RegisterView(tk.Frame):
                 d.insert("end", f"{suffix:<5} ", "name")
                 d.insert("end", f"{u:<13} {_signed(u, b)}\n")
             d.insert("end", "bin ", "name")
-            d.insert("end", _bin(v, bits))
+            old = self.prev.get(name) if self.prev else None
+            self._insert_bin(d, v, old, bits, [changed] if changed else [])
         d.configure(state="disabled")
 
     def _detail_sr(self, d, sr, changed):
@@ -186,7 +216,10 @@ class RegisterView(tk.Frame):
         d.insert("end", f"SR = ${sr:04X}", ("title", changed))
         d.insert("end", "   status register, " + ("supervisor" if sr & 0x2000 else "user")
                  + " mode\n", "name")
-        d.insert("end", "bin " + _bin(sr, 16) + "\n")
+        d.insert("end", "bin ")
+        old = self.prev.get("SR") if self.prev else None
+        self._insert_bin(d, sr, old, 16, [changed] if changed else [])
+        d.insert("end", "\n")
         d.insert("end", "    T.S. .III ...X NZVC\n", "ruler")
         bit("T", 15, "trace", 10); bit("S", 13, "supervisor", 12)
         d.insert("end", f"I={(sr >> 8) & 7} "); d.insert("end", "int. mask\n", "name")
