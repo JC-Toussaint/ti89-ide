@@ -582,8 +582,10 @@ class IdeApp:
         self.last_build = res
         self._show_build(res)
         action, self.after_build = self.after_build, None
+        self.debug_building = False
         if action and res.ok:
             action()
+        self._opt_show()
 
     def _show_build(self, res):
         self.output.configure(state="normal")
@@ -750,6 +752,8 @@ class IdeApp:
         # le code suit alors fidèlement les lignes C et les variables restent en mémoire.
         if self._needs_build("-O0"):
             self.after_build = self._launch_debug
+            self.debug_building = True          # l'indicateur affiche « -O0 debug »
+            self._opt_show()
             self.compile("-O0")
         else:
             self._launch_debug()
@@ -891,7 +895,14 @@ class IdeApp:
     def _opt_show(self):
         level = self.opt_level.get()
         label, tip = OPT_LEVELS[level]
-        self.opt_label.configure(text=level)
+        if getattr(self, "debug_building", False) or self.debugger.state != IDLE:
+            # Session de débogage : le programme est compilé sans optimisation
+            self.opt_label.configure(text="-O0 debug", fg="#c4b5fd")
+            self.opt_tip.text = ("Debugging: the program is built with -O0 (no optimization),\n"
+                                 "so that stepping follows the C lines and variables stay in memory.\n"
+                                 f"Build / Run / Send use your setting: {label} ({level}).")
+            return
+        self.opt_label.configure(text=level, fg="#93c5fd")
         self.opt_tip.text = (f"Optimization: {label} ({level}), {tip}.\n"
                              "Used by Build, Run and Send. Debug always uses -O0.\n"
                              "Click to change (or Program > Optimization).")
@@ -909,6 +920,8 @@ class IdeApp:
         self._opt_changed()
 
     def _update_buttons(self):
+        if hasattr(self, "opt_label"):
+            self._opt_show()
         st = self.debugger.state
         ready = self.session.ready
         def en(b, on):
