@@ -110,6 +110,14 @@ unlock when while xor xorpic zeros zoombox zoomstd
 """.lower().split())
 
 
+# Niveaux d'optimisation des versions finales (Build, Run, Send). Debug utilise toujours -O0.
+OPT_LEVELS = {
+    "-O2": ("Speed", "optimized for speed (default)"),
+    "-Os": ("Size", "optimized for size: smaller program, uses less calculator memory"),
+    "-O0": ("None", "no optimization: largest and slowest, like the debug build"),
+}
+
+
 def language_of(path):
     ext = os.path.splitext(path or "")[1].lower()
     return {".s": "gas", ".asm": "a68k"}.get(ext, "c")
@@ -138,6 +146,9 @@ class IdeApp:
         self.last_lcd = None
         self.emu_debt = 0.0
         self.last_wall = time.perf_counter()
+        self.opt_level = tk.StringVar(value=self._load_config().get("optimize", "-O2"))
+        if self.opt_level.get() not in OPT_LEVELS:
+            self.opt_level.set("-O2")
         self._style()
         self._build_ui()
         self._bind_keys()
@@ -352,6 +363,12 @@ class IdeApp:
         self.cursor_label = tk.Label(status, text="", bg="#18191c", fg=UI["muted"],
                                      font=("DejaVu Sans", 10), padx=8)
         self.cursor_label.pack(side="right")
+        self.opt_label = tk.Label(status, text="", bg="#18191c", fg="#93c5fd", cursor="hand2",
+                                  font=("DejaVu Sans Mono", 9, "bold"), padx=8)
+        self.opt_label.pack(side="right")
+        self.opt_label.bind("<Button-1>", lambda e: self._opt_cycle())
+        self.opt_tip = Tooltip(self.opt_label, "")
+        self._opt_show()
         self.file_label = tk.Label(status, text="", bg="#18191c", fg="#5d616b",
                                    font=("DejaVu Sans", 9), padx=8)
         self.file_label.pack(side="right")
@@ -376,6 +393,11 @@ class IdeApp:
         p.add_command(label="Run in Emulator", accelerator="F5", command=self.run_program)
         p.add_command(label="Debug", accelerator="F6", command=self.debug_program)
         p.add_command(label="Stop", accelerator="Shift+F5", command=self.stop_program)
+        om = tk.Menu(p, **mopts)
+        for level, (label, _tip) in OPT_LEVELS.items():
+            om.add_radiobutton(label=f"{label}  ({level})", value=level, variable=self.opt_level,
+                               command=self._opt_changed, selectcolor="#3b82f6")
+        p.add_cascade(label="Optimization", menu=om)
         p.add_separator()
         p.add_command(label="Send to TI-89 (USB)", accelerator="Ctrl+T",
                       command=self.send_to_calc)
@@ -424,7 +446,7 @@ class IdeApp:
         try:
             os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
             with open(CONFIG_PATH, "w") as f:
-                json.dump({"last_file": self.path}, f)
+                json.dump({"last_file": self.path, "optimize": self.opt_level.get()}, f)
         except OSError:
             pass
 
@@ -531,7 +553,8 @@ class IdeApp:
             self.root.destroy()
 
     # ------------------------------------------------------------ compilation
-    def compile(self, optimize="-O2"):
+    def compile(self, optimize=None):
+        optimize = optimize or self.opt_level.get()
         if self.building:
             return
         if not self.save():
@@ -578,7 +601,8 @@ class IdeApp:
         n_warn = sum(m.severity == "warning" for m in msgs)
         if res.ok:
             extra = f", {n_warn} warning(s)" if n_warn else ""
-            self._set_status(f"✔ Built: {os.path.basename(res.program)} ({res.size} bytes){extra}",
+            self._set_status(f"✔ Built: {os.path.basename(res.program)} "
+                             f"({res.size} bytes, {getattr(res, 'opt', '')}){extra}",
                              UI["ok"])
         else:
             self._set_status(f"✘ Build failed: {n_err} error(s), {n_warn} warning(s)", UI["err"])
@@ -604,11 +628,12 @@ class IdeApp:
         self.status.configure(text=text, fg=color or UI["muted"])
 
     # ------------------------------------------------------------ exécution
-    def _needs_build(self, opt="-O2"):
+    def _needs_build(self, opt=None):
+        opt = opt or self.opt_level.get()
         b = self.last_build
         if self.dirty or not b or not b.ok or not os.path.exists(b.program):
             return True
-        if getattr(b, "opt", "-O2") != opt:
+        if getattr(b, "opt", None) != opt:
             return True
         return os.path.getmtime(self.path) > os.path.getmtime(b.program)
 
@@ -620,9 +645,9 @@ class IdeApp:
             return
         if self.debugger.state != IDLE:
             self._end_debug()
-        if self._needs_build("-O2"):
+        if self._needs_build():
             self.after_build = self._launch
-            self.compile("-O2")
+            self.compile()
         else:
             self._launch()
 
@@ -660,9 +685,9 @@ class IdeApp:
     def send_to_calc(self):
         if self.building or getattr(self, "sending", False):
             return
-        if self._needs_build("-O2"):
+        if self._needs_build():
             self.after_build = self._start_send
-            self.compile("-O2")
+            self.compile()
         else:
             self._start_send()
 
@@ -862,6 +887,26 @@ class IdeApp:
             if m and not lines[i].lstrip().startswith((";", "|", "*")):
                 return m.group(1)
         return None
+
+    def _opt_show(self):
+        level = self.opt_level.get()
+        label, tip = OPT_LEVELS[level]
+        self.opt_label.configure(text=level)
+        self.opt_tip.text = (f"Optimization: {label} ({level}), {tip}.\n"
+                             "Used by Build, Run and Send. Debug always uses -O0.\n"
+                             "Click to change (or Program > Optimization).")
+
+    def _opt_changed(self):
+        self._opt_show()
+        self._save_config()
+        level = self.opt_level.get()
+        self._set_status(f"Optimization: {OPT_LEVELS[level][0]} ({level}). "
+                         "The next Build / Run / Send will rebuild with it.")
+
+    def _opt_cycle(self):
+        levels = list(OPT_LEVELS)
+        self.opt_level.set(levels[(levels.index(self.opt_level.get()) + 1) % len(levels)])
+        self._opt_changed()
 
     def _update_buttons(self):
         st = self.debugger.state

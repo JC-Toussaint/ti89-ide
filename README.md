@@ -11,7 +11,10 @@ emulator, debug it at source level, and send it to the real calculator over USB.
 - **Editor** with syntax highlighting for C, GNU as and A68k assembly, line numbers,
   auto-indent, breakpoints in the margin.
 - **Build** with [GCC4TI](https://github.com/debrouxl/gcc4ti) (GCC 4.1.2, C99 mode),
-  errors and warnings listed and highlighted in the code.
+  errors and warnings listed and highlighted in the code. Optimization level for
+  Build / Run / Send: speed (`-O2`, default), size (`-Os`) or none (`-O0`), in
+  *Program > Optimization* or by clicking the indicator in the status bar; Debug always
+  builds with `-O0`.
 - **Run** in an emulated TI-89 Titanium: only the calculator screen is shown; your PC
   keyboard types on the calculator (AZERTY or QWERTY, arrows can be held for games).
   Grayscale (4 levels) is rendered correctly.
