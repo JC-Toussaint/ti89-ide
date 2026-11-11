@@ -11,9 +11,10 @@ Les valeurs modifiées depuis la pause précédente sont en jaune.
 import tkinter as tk
 
 COL = {"bg": "#232428", "fg": "#d4d4d4", "muted": "#8b8f98", "changed": "#fbbf24",
-       "bitchanged": "#f87171",
+       "bitchanged_bg": "#c81e1e", "bitchanged_fg": "#ffffff",
        "sel": "#264f78", "btn": "#2b2d31", "btn_on": "#3b82f6", "ruler": "#5d616b"}
 FONT = ("DejaVu Sans Mono", 9)
+FONT_BOLD = ("DejaVu Sans Mono", 9, "bold")
 FORMATS = (("hex", "Hex"), ("dec", "Dec"), ("sdec", "±Dec"), ("bin", "Bin"))
 ORDER = [f"D{i}" for i in range(8)] + [f"A{i}" for i in range(8)]
 
@@ -55,9 +56,11 @@ class RegisterView(tk.Frame):
         self.text.pack(fill="x", padx=6)
         self.text.tag_configure("name", foreground=COL["muted"])
         self.text.tag_configure("changed", foreground=COL["changed"])
-        self.text.tag_configure("bitchanged", foreground=COL["bitchanged"])
-        self.text.tag_raise("bitchanged", "changed")
+        # Bits modifiés : blanc gras sur fond rouge (lisible aussi sur la ligne sélectionnée)
+        self.text.tag_configure("bitchanged", foreground=COL["bitchanged_fg"],
+                                background=COL["bitchanged_bg"], font=FONT_BOLD)
         self.text.tag_configure("selected", background=COL["sel"])
+        self.text.tag_raise("bitchanged")           # au-dessus de « changed » et « selected »
         self.text.bind("<MouseWheel>", lambda e: self.text.yview_scroll(-1 if e.delta > 0 else 1, "units"))
         self.text.bind("<Button-4>", lambda e: self.text.yview_scroll(-1, "units"))
         self.text.bind("<Button-5>", lambda e: self.text.yview_scroll(1, "units"))
@@ -70,8 +73,8 @@ class RegisterView(tk.Frame):
         self.detail.tag_configure("title", foreground="#93c5fd")
         self.detail.tag_configure("ruler", foreground=COL["ruler"])
         self.detail.tag_configure("changed", foreground=COL["changed"])
-        self.detail.tag_configure("bitchanged", foreground=COL["bitchanged"])
-        self.detail.tag_raise("bitchanged", "changed")
+        self.detail.tag_configure("bitchanged", foreground=COL["bitchanged_fg"],
+                                  background=COL["bitchanged_bg"], font=FONT_BOLD)
         self.show(None)
 
     # ------------------------------------------------------------ API
