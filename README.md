@@ -17,7 +17,10 @@ emulator, debug it at source level, and send it to the real calculator over USB.
   Grayscale (4 levels) is rendered correctly.
 - **Debugger**
   - breakpoints, Continue, Pause, Step Over, Step Into, Step Out;
-  - 68000 registers (changed values highlighted), disassembly annotated with source lines;
+  - 68000 registers in hex, unsigned / signed decimal or binary (changed values
+    highlighted); click a register for its .b / .w / .l values, binary, ASCII, the
+    nearest program label, or the SR flags bit by bit;
+  - disassembly annotated with source lines;
   - **C variables** (locals, parameters, globals, statics) with their types: integers,
     chars, enums, TI floats, pointers, strings, arrays, structs;
   - **memory view** (hex dump, follow a register, edit RAM bytes);

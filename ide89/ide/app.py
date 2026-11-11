@@ -12,6 +12,7 @@ from .build import build
 from .editor import CodeEditor, THEME
 from . import realcalc
 from .memview import MemoryView
+from .regview import RegisterView
 from .icons import make_icon
 from PIL import ImageTk
 
@@ -339,13 +340,9 @@ class IdeApp:
         self.emu_status.pack(fill="x", padx=6, pady=(0, 6))
         rf = ttk.Labelframe(right, text="68000 Registers", style="Panel.TLabelframe")
         rf.pack(fill="x", padx=6, pady=(6, 0))
-        self.regs = tk.Text(rf, bg=UI["panel"], fg=UI["fg"], font=("DejaVu Sans Mono", 10),
-                            relief="flat", height=12, width=34, state="disabled", cursor="arrow")
-        self.regs.tag_configure("name", foreground=UI["muted"])
-        self.regs.tag_configure("changed", foreground="#fbbf24")
-        self.regs.pack(fill="x", padx=6, pady=4)
+        self.regview = RegisterView(rf, symbol_for=self._symbol_for)
+        self.regview.pack(fill="x", padx=0, pady=(0, 2))
         self.prev_regs = {}
-        self._show_registers(None)
         # Barre d'état
         status = tk.Frame(self.root, bg="#18191c")
         status.pack(fill="x", side="bottom")
@@ -880,33 +877,25 @@ class IdeApp:
         en(self.btn_into, st == PAUSED)
         en(self.btn_out, st == PAUSED)
 
-    def _show_registers(self, regs):
-        t = self.regs
-        t.configure(state="normal")
-        t.delete("1.0", "end")
-        if regs is None:
-            t.insert("end", "\n  Available while the program\n  is paused (debugging).", "name")
-            t.configure(state="disabled")
-            return
-        prev = self.prev_regs
-        def put(name, val, width):
-            t.insert("end", f"{name:<3}", "name")
-            t.insert("end", f"{val:0{width}X}", "changed" if prev and prev.get(name) != val else "")
-        for i in range(8):
-            put(f"D{i}", regs[f"D{i}"], 8)
-            t.insert("end", "   ")
-            put(f"A{i}", regs[f"A{i}"], 8)
-            t.insert("end", "\n")
-        put("PC", regs["PC"], 6)
-        t.insert("end", "     ")
-        put("SR", regs["SR"], 4)
-        sr = regs["SR"]
-        flags = "  ".join(f"{n}={(sr >> b) & 1}" for n, b in (("X", 4), ("N", 3), ("Z", 2), ("V", 1), ("C", 0)))
-        mode = "supervisor" if sr & 0x2000 else "user"
-        t.insert("end", f"\n{flags}\n", "")
-        t.insert("end", f"{mode} mode, interrupt mask {(sr >> 8) & 7}", "name")
-        t.configure(state="disabled")
-        self.prev_regs = dict(regs)
+    def _show_registers(self, regs, new_pause=True):
+        self.regview.show(regs, new_pause)
+
+    def _symbol_for(self, addr):
+        """« étiquette+décalage » si l'adresse tombe dans le programme débogué."""
+        d = self.debugger
+        if d.state == IDLE or d.base is None or d.info is None:
+            return None
+        off = addr - d.base
+        if not 0 <= off < d.info.text_size + 0x1000:
+            return None
+        best = None
+        for name, v in d.info.symbols.items():
+            if v <= off and (best is None or v > best[1] or
+                             (v == best[1] and name.startswith("_") < best[0].startswith("_"))):
+                best = (name, v)
+        if best is None:
+            return None
+        return best[0] if off == best[1] else f"{best[0]}+{off - best[1]}"
 
     # ------------------------------------------------------------ variables
     def _show_variables(self, clear=False):

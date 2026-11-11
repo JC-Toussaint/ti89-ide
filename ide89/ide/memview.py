@@ -175,5 +175,5 @@ class MemoryView(tk.Frame):
                 return "break"
             self.refresh()
             if self.app.debugger.state != "idle":
-                self.app._show_registers(self.app.debugger.registers())
+                self.app._show_registers(self.app.debugger.registers(), new_pause=False)
         return "break"
