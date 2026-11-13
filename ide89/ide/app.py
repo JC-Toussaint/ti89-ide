@@ -313,6 +313,8 @@ class IdeApp:
         self.vars.bind("<<TreeviewOpen>>", self._on_var_open)
         self.vars.bind("<<TreeviewClose>>", self._on_var_close)
         self.var_kids = {}          # iid -> fonction qui produit les enfants
+        self._touched = set()
+        self._new_vals = {}
         self.var_expanded = {"L", "G", "C"}
         self.prev_vals = {}
         self.var_reader = None
@@ -327,6 +329,7 @@ class IdeApp:
         self.memview = MemoryView(bottom, self)
         bottom.add(self.memview, text="Memory")
         self.bottom = bottom
+        bottom.bind("<<NotebookTabChanged>>", self._refresh_current_tab)
         self.mem_tick = 0.0
 
         right = tk.Frame(main, bg=UI["bg"], width=360)
@@ -553,7 +556,7 @@ class IdeApp:
             self.root.destroy()
 
     # ------------------------------------------------------------ compilation
-    def compile(self, optimize=None):
+    def compile(self, optimize=None, debug_build=False):
         optimize = optimize or self.opt_level.get()
         if self.building:
             return
@@ -565,8 +568,9 @@ class IdeApp:
         self._set_status("Building…")
         path = self.path
         def work():
-            res = build(path, optimize=optimize)
+            res = build(path, optimize=optimize, debug_build=debug_build)
             res.opt = optimize
+            res.debug_build = debug_build
             self.build_queue.put(res)
         threading.Thread(target=work, daemon=True).start()
         self.root.after(50, self._poll_build)
@@ -630,12 +634,12 @@ class IdeApp:
         self.status.configure(text=text, fg=color or UI["muted"])
 
     # ------------------------------------------------------------ exécution
-    def _needs_build(self, opt=None):
+    def _needs_build(self, opt=None, debug_build=False):
         opt = opt or self.opt_level.get()
         b = self.last_build
         if self.dirty or not b or not b.ok or not os.path.exists(b.program):
             return True
-        if getattr(b, "opt", None) != opt:
+        if getattr(b, "opt", None) != opt or getattr(b, "debug_build", False) != debug_build:
             return True
         return os.path.getmtime(self.path) > os.path.getmtime(b.program)
 
@@ -750,11 +754,11 @@ class IdeApp:
             self._end_debug()
         # Le débogage se fait sur une compilation sans optimisation (-O0) :
         # le code suit alors fidèlement les lignes C et les variables restent en mémoire.
-        if self._needs_build("-O0"):
+        if self._needs_build("-O0", debug_build=True):
             self.after_build = self._launch_debug
             self.debug_building = True          # l'indicateur affiche « -O0 debug »
             self._opt_show()
-            self.compile("-O0")
+            self.compile("-O0", debug_build=True)
         else:
             self._launch_debug()
 
@@ -829,9 +833,11 @@ class IdeApp:
         if d.state == PAUSED:                 # pas d'une instruction (assembleur) : déjà fait
             self._on_debug_paused()
             return
+        self._set_status("▶ Running…" if mode == "continue" else "▶ Stepping…", "#c4b5fd")
+        if mode != "continue" and self._step_now():
+            return                            # arrivé : la pause est déjà affichée
         self.editor.clear_marks("exec_line")
         self._update_buttons()
-        self._set_status("▶ Running…" if mode == "continue" else "▶ Stepping…", "#c4b5fd")
 
     def dbg_pause(self):
         if self.debugger.state == RUNNING:
@@ -875,11 +881,11 @@ class IdeApp:
             self._set_status(f"‖ Paused inside AMS (PC=${regs['PC']:06X}), outside your program. "
                              "F10/F11: go to the next line of your code.", "#fbbf24")
         self._show_registers(regs)
-        self._show_disasm(d.disassembly())
-        self._show_variables()
-        self.memview.refresh(paused=True)
         if self.bottom.index("current") not in (2, 3, 4):
             self.bottom.select(2)
+        # Seul l'onglet affiché est mis à jour ; les autres le seront à leur ouverture
+        self._dirty_tabs = {2, 3, 4}
+        self._refresh_current_tab()
         self._update_buttons()
 
     def _asm_label_above(self, line):
@@ -919,6 +925,29 @@ class IdeApp:
         self.opt_level.set(levels[(levels.index(self.opt_level.get()) + 1) % len(levels)])
         self._opt_changed()
 
+    def _step_now(self):
+        """Exécute un pas tout de suite, à pleine vitesse (au plus 50 ms ici ; s'il est
+        plus long, la boucle de l'IDE prend le relais). Retourne True si on est en pause."""
+        t0 = time.perf_counter()
+        while self.debugger.state == RUNNING and time.perf_counter() - t0 < 0.05:
+            if not self._emu_tick():
+                break
+        return self.debugger.state == PAUSED
+
+    def _refresh_current_tab(self, event=None):
+        """Met à jour l'onglet du bas affiché s'il a changé depuis la dernière pause."""
+        dirty = getattr(self, "_dirty_tabs", set())
+        cur = self.bottom.index("current")
+        if cur not in dirty or self.debugger.state != PAUSED:
+            return
+        dirty.discard(cur)
+        if cur == 2:
+            self._show_variables()
+        elif cur == 3:
+            self._show_disasm(self.debugger.disassembly())
+        elif cur == 4:
+            self.memview.refresh(paused=True)
+
     def _update_buttons(self):
         if hasattr(self, "opt_label"):
             self._opt_show()
@@ -957,71 +986,111 @@ class IdeApp:
 
     # ------------------------------------------------------------ variables
     def _show_variables(self, clear=False):
+        """Met à jour l'onglet Variables SUR PLACE : seules les valeurs qui changent sont
+        modifiées dans l'arbre (tout reconstruire forçait Tk à tout redessiner à chaque pas)."""
         tv = self.vars
-        tv.delete(*tv.get_children())
-        self.var_kids.clear()
         if clear:
+            tv.delete(*tv.get_children())
+            self.var_kids.clear()
             return
+        self._new_vals = {}
+        self._touched = set()
         if self.var_reader is None:
             ar = getattr(self, "asm_var_reader", None)
             if ar is None or self.debugger.state == IDLE:
+                tv.delete(*tv.get_children())
                 return
-            self._new_vals = {}
             data, consts = ar.data_nodes(), ar.const_nodes()
-            tv.insert("", "end", iid="D", text="Data (labels)", open=True, tags=("group",),
-                      values=("" if data else "no dc / ds / .byte / .word... data in the source", ""))
+            self._upsert_group("D", "Data (labels)", True,
+                               ("" if data else "no dc / ds / .byte / .word... data in the source", ""))
             for n in data:
-                self._insert_var("D", n)
-            tv.insert("", "end", iid="C", text="Constants (equ)", open="C" in self.var_expanded,
-                      tags=("group",))
+                self._upsert("D", n)
+            self._upsert_group("C", "Constants (equ)", "C" in self.var_expanded)
             for n in consts:
-                self._insert_var("C", n)
-            for iid in sorted(self.var_expanded, key=lambda x: x.count("/")):
-                if tv.exists(iid) and iid not in ("D", "C"):
-                    self._populate(iid)
-                    tv.item(iid, open=True)
-            self.prev_vals.update(self._new_vals)
-            return
-        self._new_vals = {}
-        fn, loc = self.var_reader.locals()
-        if fn:
-            tv.insert("", "end", iid="L", text=f"Locals — {fn}()", open=True, tags=("group",))
-            for n in loc:
-                self._insert_var("L", n)
-        tv.insert("", "end", iid="G", text="Globals", open="G" in self.var_expanded, tags=("group",))
-        for n in self.var_reader.globals():
-            self._insert_var("G", n)
-        # Redéplie ce qui l'était (les parents d'abord)
-        for iid in sorted(self.var_expanded, key=lambda x: x.count("/") + x.count(".")):
-            if tv.exists(iid) and iid not in ("L", "G"):
-                self._populate(iid)
-                tv.item(iid, open=True)
+                self._upsert("C", n)
+        else:
+            fn, loc = self.var_reader.locals()
+            if fn:
+                self._upsert_group("L", f"Locals — {fn}()", True)
+                for n in loc:
+                    self._upsert("L", n)
+            self._upsert_group("G", "Globals", "G" in self.var_expanded)
+            for n in self.var_reader.globals():
+                self._upsert("G", n)
+        self._prune("")
         self.prev_vals.update(self._new_vals)
 
-    def _insert_var(self, parent, n):
-        tags = []
-        if n.error:
-            tags.append("error")
-        elif n.path in self.prev_vals and self.prev_vals[n.path] != n.value:
-            tags.append("changed")
-        self._new_vals[n.path] = n.value
-        if self.vars.exists(n.path):
+    def _upsert_group(self, iid, text, is_open, values=("", "")):
+        tv = self.vars
+        self._touched.add(iid)
+        if not tv.exists(iid):
+            tv.insert("", "end", iid=iid, text=text, open=is_open, tags=("group",), values=values)
             return
-        self.vars.insert(parent, "end", iid=n.path, text=n.name, values=(n.value, n.type_name),
-                         tags=tags)
-        if n.children:
-            self.var_kids[n.path] = n.children
-            self.vars.insert(n.path, "end", iid=n.path + "#…", text="…")
+        if tv.item(iid, "text") != text:
+            tv.item(iid, text=text)
+        if tuple(str(v) for v in tv.item(iid, "values")) != tuple(values):
+            tv.item(iid, values=values)
+
+    def _upsert(self, parent, n):
+        """Insère le nœud, ou ne met à jour que ce qui a changé (valeur, couleur)."""
+        tv = self.vars
+        if n.error:
+            tags = ("error",)
+        elif n.path in self.prev_vals and self.prev_vals[n.path] != n.value:
+            tags = ("changed",)
+        else:
+            tags = ()
+        self._new_vals[n.path] = n.value
+        self._touched.add(n.path)
+        vals = (n.value, n.type_name)
+        if tv.exists(n.path):
+            cur = tv.item(n.path)
+            cur_vals = tuple(str(v) for v in cur["values"]) if cur["values"] else ()
+            cur_tags = tuple(cur["tags"]) if cur["tags"] else ()
+            if cur_vals != vals or cur_tags != tags:
+                tv.item(n.path, values=vals, tags=tags)
+        else:
+            tv.insert(parent, "end", iid=n.path, text=n.name, values=vals, tags=tags)
+        if not n.children:
+            return
+        self.var_kids[n.path] = n.children
+        dummy = n.path + "#…"
+        if n.path in self.var_expanded:
+            if tv.exists(dummy):
+                tv.delete(dummy)
+            try:
+                for k in n.children():
+                    self._upsert(n.path, k)
+            except Exception as e:
+                err = n.path + "#err"
+                self._touched.add(err)
+                if not tv.exists(err):
+                    tv.insert(n.path, "end", iid=err, text=f"‹{e}›", tags=("error",))
+            if not tv.item(n.path, "open"):
+                tv.item(n.path, open=True)
+        else:
+            self._touched.add(dummy)            # replié : enfants calculés à l'ouverture
+            if not tv.exists(dummy):
+                tv.insert(n.path, "end", iid=dummy, text="…")
+
+    def _prune(self, parent):
+        """Supprime les nœuds qui n'existent plus (autre fonction, enfants repliés...)."""
+        tv = self.vars
+        for iid in tv.get_children(parent):
+            if iid not in self._touched:
+                tv.delete(iid)
+            else:
+                self._prune(iid)
 
     def _populate(self, iid):
-        kids = self.var_kids.pop(iid, None)
+        kids = self.var_kids.get(iid)
         if kids is None:
             return
         if self.vars.exists(iid + "#…"):
             self.vars.delete(iid + "#…")
         try:
             for n in kids():
-                self._insert_var(iid, n)
+                self._upsert(iid, n)
         except Exception as e:
             self.vars.insert(iid, "end", text=f"‹{e}›", tags=("error",))
 
@@ -1102,9 +1171,11 @@ class IdeApp:
                     break
         if s.ready and self.debugger.state != PAUSED:
             # Frappe automatique (lancement du programme) : pleine vitesse ; sinon temps réel
-            fast = s.keys.busy() and len(s.keys.queue) > 2
+            stepping = self.debugger.state == RUNNING and self.debugger.mode != "continue"
+            fast = (s.keys.busy() and len(s.keys.queue) > 2) or stepping
             if fast:
-                while time.perf_counter() - t0 < 0.03 and s.keys.busy():
+                while time.perf_counter() - t0 < 0.03 and (s.keys.busy() or (
+                        self.debugger.state == RUNNING and self.debugger.mode != "continue")):
                     if not self._emu_tick():
                         break
                 self.emu_debt = 0.0

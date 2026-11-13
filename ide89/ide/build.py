@@ -76,7 +76,7 @@ def parse_messages(output, source_name):
 C_STANDARD = "-std=gnu99"
 
 
-def build(source_path, optimize="-O2"):
+def build(source_path, optimize="-O2", debug_build=False):
     """Compile source_path en .89z (+ .dbg) dans le même dossier."""
     src_dir = os.path.dirname(os.path.abspath(source_path))
     name = os.path.splitext(os.path.basename(source_path))[0]
@@ -89,7 +89,12 @@ def build(source_path, optimize="-O2"):
             os.remove(out_base + ext)
         except FileNotFoundError:
             pass
-    cmd = ["tigcc", "-g", optimize, C_STANDARD, "-Wall", os.path.basename(source_path), "-o", name]
+    cmd = ["tigcc", "-g", optimize, C_STANDARD, "-Wall"]
+    if debug_build:
+        # Variables globales non initialisées rangées dans le programme (et non dans un
+        # bloc BSS créé au lancement) : le débogueur les trouve à leur adresse DWARF.
+        cmd.append("-mno-bss")
+    cmd += [os.path.basename(source_path), "-o", name]
     try:
         p = subprocess.run(cmd, cwd=src_dir, env=env, capture_output=True, text=True,
                            timeout=120)
