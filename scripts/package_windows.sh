@@ -41,6 +41,21 @@ mkdir -p "$PKG/projets/exemples" "$PKG/ROM"
 cp "$ROOT"/projets/exemples/*.c "$ROOT"/projets/exemples/*.s "$ROOT"/projets/exemples/*.asm \
    "$PKG/projets/exemples/"
 cp "$ROOT/LICENSE" "$PKG/"
+# GCC4TI (GCC, binutils, TIGCC library) is free software under the GNU GPL: its license
+# and where to get the corresponding sources go with the binaries.
+cp "$ROOT/gcc4ti-src/gcc4ti/trunk/tigcc-linux/COPYING" "$PKG/gcc4ti/COPYING.txt"
+cat > "$PKG/gcc4ti/SOURCES.txt" <<'TXT'
+This folder contains a Windows build of GCC4TI 0.96 Beta 11 (GCC 4.1.2 and binutils
+2.16.1 patched for the TI-68k calculators, ld-tigcc, A68k, the TIGCC library), which is
+free software distributed under the GNU General Public License (see COPYING.txt).
+
+Corresponding source code:
+  - GCC4TI, including the original GCC and binutils tarballs and the patches:
+    https://github.com/debrouxl/gcc4ti
+  - the scripts used to build this Windows version from those sources, unmodified
+    (scripts/build_gcc4ti.sh, scripts/build_gcc4ti_windows.sh):
+    https://github.com/JC-Toussaint/ti89-ide
+TXT
 cat > "$PKG/ROM/PUT_YOUR_ROM_HERE.txt" <<'TXT'
 Put the ROM image of your own TI-89 Titanium here, named ti89tv310.rom
 (4 MB, AMS 3.10). It is copyrighted by Texas Instruments and is not included.
