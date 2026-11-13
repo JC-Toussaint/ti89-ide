@@ -74,7 +74,10 @@ environment variable to it.
 
 ## Windows
 
-A native Windows version is available as a zip package: unzip it, put your ROM in the
+A native Windows version is available as a zip package:
+**[download ti89-ide-windows.zip](https://github.com/JC-Toussaint/ti89-ide/releases/download/windows-v1.0/ti89-ide-windows.zip)**
+([release page](https://github.com/JC-Toussaint/ti89-ide/releases/tag/windows-v1.0)).
+Unzip it, put your ROM in the
 `ROM` folder, and start `ti89-ide.exe` (no Python, no WSL needed). It contains the IDE,
 the emulator and a Windows build of GCC4TI whose output is identical, byte for byte, to
 the Linux one.
