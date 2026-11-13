@@ -10,6 +10,10 @@ GCC4TI = os.environ.get("TIGCC", os.path.join(REPO_ROOT, "gcc4ti"))
 _EXE = ".exe" if os.name == "nt" else ""
 
 
+# Sous Windows, ne pas ouvrir de fenêtre de console pour chaque outil lancé par l'IDE
+_NO_WINDOW = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
+
+
 def tool(name):
     """Chemin complet d'un outil GCC4TI (tigcc, a68k...) : .exe sous Windows."""
     return os.path.join(GCC4TI, "bin", name + _EXE)
@@ -103,7 +107,7 @@ def build(source_path, optimize="-O2", debug_build=False):
     cmd += [os.path.basename(source_path), "-o", name]
     try:
         p = subprocess.run(cmd, cwd=src_dir, env=env, capture_output=True, text=True,
-                           timeout=120)
+                           timeout=120, **_NO_WINDOW)
         output = p.stdout + p.stderr
         rc = p.returncode
     except FileNotFoundError:
@@ -135,7 +139,7 @@ def _a68k_listing(source_path, env):
     try:
         subprocess.run([tool("a68k"), "-i" + os.path.join(GCC4TI, "include", "asm", ""), "-g", "-t", f"-l{lst}",
                         os.path.basename(source_path), tmp_obj],
-                       cwd=src_dir, env=env, capture_output=True, timeout=60)
+                       cwd=src_dir, env=env, capture_output=True, timeout=60, **_NO_WINDOW)
     except (OSError, subprocess.TimeoutExpired):
         return ""
     finally:

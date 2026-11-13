@@ -28,3 +28,4 @@ __pycache__/
 *.dll
 emu89/core/win/
 /gcc4ti-win/
+/dist-windows/
