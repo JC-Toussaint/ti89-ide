@@ -58,6 +58,23 @@ so every run starts from a clean state.
 
 ## Installation
 
+### Ready-to-use Linux package
+
+**[download ti89-ide-linux.tar.gz](https://github.com/JC-Toussaint/ti89-ide/releases/download/linux-v1.0/ti89-ide-linux.tar.gz)**
+([release page](https://github.com/JC-Toussaint/ti89-ide/releases/tag/linux-v1.0)):
+x86_64, glibc 2.38 or later (Ubuntu 24.04+, Debian 13+, Fedora 39+...). It contains the
+IDE, the emulator and GCC4TI, with Python and Tk included:
+
+```sh
+tar -xzf ti89-ide-linux.tar.gz
+cd ti89-ide-linux
+./ti89-ide                  # after putting your ROM in ROM/ (see below)
+```
+
+The package is built with `scripts/package_linux.sh`.
+
+### From the sources
+
 ```sh
 git clone --recurse-submodules https://github.com/JC-Toussaint/ti89-ide.git
 cd ti89-ide
