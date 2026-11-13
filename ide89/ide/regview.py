@@ -9,12 +9,13 @@ Panneau des registres 68000.
 Les valeurs modifiées depuis la pause précédente sont en jaune.
 """
 import tkinter as tk
+from .fonts import SANS, MONO
 
 COL = {"bg": "#232428", "fg": "#d4d4d4", "muted": "#8b8f98", "changed": "#fbbf24",
        "bitchanged_bg": "#c81e1e", "bitchanged_fg": "#ffffff",
        "sel": "#264f78", "btn": "#2b2d31", "btn_on": "#3b82f6", "ruler": "#5d616b"}
-FONT = ("DejaVu Sans Mono", 9)
-FONT_BOLD = ("DejaVu Sans Mono", 9, "bold")
+FONT = (MONO, 9)
+FONT_BOLD = (MONO, 9, "bold")
 FORMATS = (("hex", "Hex"), ("dec", "Dec"), ("sdec", "±Dec"), ("bin", "Bin"))
 ORDER = [f"D{i}" for i in range(8)] + [f"A{i}" for i in range(8)]
 
@@ -42,10 +43,10 @@ class RegisterView(tk.Frame):
         bar = tk.Frame(self, bg=COL["bg"])
         bar.pack(fill="x", padx=6, pady=(4, 2))
         tk.Label(bar, text="Format", bg=COL["bg"], fg=COL["muted"],
-                 font=("DejaVu Sans", 9)).pack(side="left", padx=(0, 6))
+                 font=(SANS, 9)).pack(side="left", padx=(0, 6))
         for key, label in FORMATS:
             tk.Radiobutton(bar, text=label, value=key, variable=self.fmt, indicatoron=0,
-                           command=self._render, font=("DejaVu Sans", 9), width=5,
+                           command=self._render, font=(SANS, 9), width=5,
                            bg=COL["btn"], fg=COL["fg"], selectcolor=COL["btn_on"],
                            activebackground="#3a3d44", activeforeground="white",
                            relief="flat", bd=0, highlightthickness=0, pady=2

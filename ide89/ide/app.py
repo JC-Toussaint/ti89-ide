@@ -6,6 +6,7 @@ import sys
 import threading
 import time
 import tkinter as tk
+from .fonts import SANS, MONO
 from tkinter import ttk, filedialog, messagebox
 
 from .build import build
@@ -68,7 +69,7 @@ class Tooltip:
         self.tip.wm_overrideredirect(True)
         self.tip.wm_geometry(f"+{x}+{y}")
         tk.Label(self.tip, text=self.text, bg="#111214", fg="#e5e7eb", padx=8, pady=3,
-                 font=("DejaVu Sans", 9), relief="solid", bd=1).pack()
+                 font=(SANS, 9), relief="solid", bd=1).pack()
 
     def _hide(self, _e=None):
         if self.job:
@@ -166,7 +167,7 @@ class IdeApp:
         s.theme_use("clam")
         s.configure(".", background=UI["bg"], foreground=UI["fg"], fieldbackground=UI["panel"],
                     bordercolor="#3a3c42", lightcolor=UI["bg"], darkcolor=UI["bg"],
-                    font=("DejaVu Sans", 10))
+                    font=(SANS, 10))
         s.configure("TNotebook", background=UI["bg"], borderwidth=0)
         s.configure("TNotebook.Tab", background=UI["panel"], foreground=UI["muted"], padding=(12, 4))
         s.map("TNotebook.Tab", background=[("selected", UI["bg"])],
@@ -184,15 +185,15 @@ class IdeApp:
                     padding=(12, 5), borderwidth=0)
         s.map("Primary.TButton", background=[("active", "#2563eb")])
         s.configure("Small.TButton", background="#3a3d44", foreground="white", padding=(5, 4),
-                    borderwidth=0, font=("DejaVu Sans", 9))
+                    borderwidth=0, font=(SANS, 9))
         s.map("Small.TButton", background=[("active", "#50545d"), ("disabled", "#2e3035")],
               foreground=[("disabled", "#6b707a")])
         s.configure("SmallPrimary.TButton", background=UI["accent"], foreground="white",
-                    padding=(8, 4), borderwidth=0, font=("DejaVu Sans", 9, "bold"))
+                    padding=(8, 4), borderwidth=0, font=(SANS, 9, "bold"))
         s.map("SmallPrimary.TButton", background=[("active", "#2563eb"), ("disabled", "#2e3035")],
               foreground=[("disabled", "#6b707a")])
         s.configure("Debug.TButton", background="#7c3aed", foreground="white",
-                    padding=(8, 4), borderwidth=0, font=("DejaVu Sans", 9, "bold"))
+                    padding=(8, 4), borderwidth=0, font=(SANS, 9, "bold"))
         s.map("Debug.TButton", background=[("active", "#6d28d9"), ("disabled", "#2e3035")],
               foreground=[("disabled", "#6b707a")])
         s.configure("Icon.TButton", background=UI["bg"], padding=(5, 4), borderwidth=0,
@@ -203,7 +204,7 @@ class IdeApp:
         s.map("IconRun.TButton", background=[("active", UI["bg"]), ("disabled", UI["bg"])])
         s.configure("Panel.TLabelframe", background=UI["panel"], bordercolor="#3a3c42")
         s.configure("Panel.TLabelframe.Label", background=UI["panel"], foreground=UI["muted"],
-                    font=("DejaVu Sans", 10, "bold"))
+                    font=(SANS, 10, "bold"))
 
     def _build_ui(self):
         # Barre d'outils
@@ -291,7 +292,7 @@ class IdeApp:
         bottom.add(pf, text="Problems")
         # Onglet Sortie du compilateur
         of = tk.Frame(bottom, bg=UI["panel"])
-        self.output = tk.Text(of, bg=UI["panel"], fg=UI["fg"], font=("DejaVu Sans Mono", 10),
+        self.output = tk.Text(of, bg=UI["panel"], fg=UI["fg"], font=(MONO, 10),
                               relief="flat", height=8, wrap="word", state="disabled")
         self.output.pack(fill="both", expand=True)
         bottom.add(of, text="Output")
@@ -320,7 +321,7 @@ class IdeApp:
         self.var_reader = None
         bottom.add(vf, text="Variables")
         df = tk.Frame(bottom, bg=UI["panel"])
-        self.disasm = tk.Text(df, bg=UI["panel"], fg=UI["fg"], font=("DejaVu Sans Mono", 10),
+        self.disasm = tk.Text(df, bg=UI["panel"], fg=UI["fg"], font=(MONO, 10),
                               relief="flat", height=8, wrap="none", state="disabled")
         self.disasm.tag_configure("pc", background="#4b4b18", foreground="#ffffff")
         self.disasm.tag_configure("src", foreground="#6a9955")
@@ -349,7 +350,7 @@ class IdeApp:
         self.lcd.bind("<FocusIn>", lambda e: self._lcd_hint())
         self.lcd.bind("<FocusOut>", lambda e: self._lcd_hint())
         self.emu_status = tk.Label(lf, text="Starting the emulated calculator…",
-                                   bg=UI["panel"], fg=UI["muted"], font=("DejaVu Sans", 9),
+                                   bg=UI["panel"], fg=UI["muted"], font=(SANS, 9),
                                    anchor="w", justify="left")
         self.emu_status.pack(fill="x", padx=6, pady=(0, 6))
         rf = ttk.Labelframe(right, text="68000 Registers", style="Panel.TLabelframe")
@@ -361,19 +362,19 @@ class IdeApp:
         status = tk.Frame(self.root, bg="#18191c")
         status.pack(fill="x", side="bottom")
         self.status = tk.Label(status, text="", bg="#18191c", fg=UI["muted"], anchor="w",
-                               font=("DejaVu Sans", 10), padx=8, pady=3)
+                               font=(SANS, 10), padx=8, pady=3)
         self.status.pack(side="left", fill="x", expand=True)
         self.cursor_label = tk.Label(status, text="", bg="#18191c", fg=UI["muted"],
-                                     font=("DejaVu Sans", 10), padx=8)
+                                     font=(SANS, 10), padx=8)
         self.cursor_label.pack(side="right")
         self.opt_label = tk.Label(status, text="", bg="#18191c", fg="#93c5fd", cursor="hand2",
-                                  font=("DejaVu Sans Mono", 9, "bold"), padx=8)
+                                  font=(MONO, 9, "bold"), padx=8)
         self.opt_label.pack(side="right")
         self.opt_label.bind("<Button-1>", lambda e: self._opt_cycle())
         self.opt_tip = Tooltip(self.opt_label, "")
         self._opt_show()
         self.file_label = tk.Label(status, text="", bg="#18191c", fg="#5d616b",
-                                   font=("DejaVu Sans", 9), padx=8)
+                                   font=(SANS, 9), padx=8)
         self.file_label.pack(side="right")
         main.pack(fill="both", expand=True)   # après la barre d'état, pour qu'elle reste visible
 

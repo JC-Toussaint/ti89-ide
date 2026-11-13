@@ -7,6 +7,12 @@ from dataclasses import dataclass, field
 # Racine du dépôt : .../ide89/ide/build.py -> trois niveaux au-dessus
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 GCC4TI = os.environ.get("TIGCC", os.path.join(REPO_ROOT, "gcc4ti"))
+_EXE = ".exe" if os.name == "nt" else ""
+
+
+def tool(name):
+    """Chemin complet d'un outil GCC4TI (tigcc, a68k...) : .exe sous Windows."""
+    return os.path.join(GCC4TI, "bin", name + _EXE)
 
 # GCC 4.1 : « fichier.c:12: error: message » (pas de colonne)
 _MSG_RE = re.compile(r"^(?P<file>[^:\n]+?):(?P<line>\d+)(?::(?P<col>\d+))?:\s*"
@@ -89,7 +95,7 @@ def build(source_path, optimize="-O2", debug_build=False):
             os.remove(out_base + ext)
         except FileNotFoundError:
             pass
-    cmd = ["tigcc", "-g", optimize, C_STANDARD, "-Wall"]
+    cmd = [tool("tigcc"), "-g", optimize, C_STANDARD, "-Wall"]
     if debug_build:
         # Variables globales non initialisées rangées dans le programme (et non dans un
         # bloc BSS créé au lancement) : le débogueur les trouve à leur adresse DWARF.
@@ -109,7 +115,8 @@ def build(source_path, optimize="-O2", debug_build=False):
     ok = rc == 0 and os.path.exists(program)
     if not ok and not any(m.severity == "error" for m in msgs):
         msgs.append(Message("error", 0, f"build failed (exit code {rc})"))
-    res = BuildResult(ok, msgs, f"$ {' '.join(cmd)}\n{output}")
+    shown = ["tigcc"] + cmd[1:]                 # chemin complet de tigcc inutile à l'affichage
+    res = BuildResult(ok, msgs, f"$ {' '.join(shown)}\n{output}")
     if ok:
         res.program = program
         res.size = os.path.getsize(program)
@@ -126,7 +133,7 @@ def _a68k_listing(source_path, env):
     lst = os.path.splitext(os.path.abspath(source_path))[0] + ".lst"
     tmp_obj = lst + ".o"
     try:
-        subprocess.run(["a68k", f"-i{GCC4TI}/include/asm/", "-g", "-t", f"-l{lst}",
+        subprocess.run([tool("a68k"), "-i" + os.path.join(GCC4TI, "include", "asm", ""), "-g", "-t", f"-l{lst}",
                         os.path.basename(source_path), tmp_obj],
                        cwd=src_dir, env=env, capture_output=True, timeout=60)
     except (OSError, subprocess.TimeoutExpired):

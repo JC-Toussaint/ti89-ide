@@ -23,3 +23,8 @@
 *.log
 __pycache__/
 .venv/
+
+# Windows : DLL du cœur C et ses objets
+*.dll
+emu89/core/win/
+/gcc4ti-win/

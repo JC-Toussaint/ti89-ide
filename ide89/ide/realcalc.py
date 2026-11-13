@@ -98,13 +98,32 @@ def udev_install_command():
 _libs = None
 
 
+# Sous Windows, les bibliothèques TI sont celles de TiLP pour Windows (dossier bin de TiLP)
+_WIN_DIRS = [os.environ.get("TILP_DIR", ""),
+             r"C:\Program Files (x86)\TiLP-2\bin", r"C:\Program Files\TiLP-2\bin",
+             r"C:\Program Files (x86)\TiLP\bin", r"C:\Program Files\TiLP\bin"]
+
+
+def _load_lib(linux_name, win_names):
+    if os.name != "nt":
+        return ctypes.CDLL(linux_name)
+    for d in _WIN_DIRS:
+        if d and os.path.isdir(d):
+            os.add_dll_directory(d)
+            for n in win_names:
+                if os.path.exists(os.path.join(d, n)):
+                    return ctypes.CDLL(os.path.join(d, n))
+    raise SendError("TI link libraries not found: install TiLP for Windows "
+                    "(or set TILP_DIR to its bin folder)")
+
+
 def _load():
     global _libs
     if _libs:
         return _libs
-    tifiles = ctypes.CDLL("libtifiles2.so.11")
-    ticables = ctypes.CDLL("libticables2.so.8")
-    ticalcs = ctypes.CDLL("libticalcs2.so.13")
+    tifiles = _load_lib("libtifiles2.so.11", ["libtifiles2-11.dll", "libtifiles2.dll"])
+    ticables = _load_lib("libticables2.so.8", ["libticables2-8.dll", "libticables2.dll"])
+    ticalcs = _load_lib("libticalcs2.so.13", ["libticalcs2-13.dll", "libticalcs2.dll"])
     ticables.ticables_handle_new.restype = ctypes.c_void_p
     ticables.ticables_handle_new.argtypes = [ctypes.c_int, ctypes.c_int]
     ticables.ticables_handle_del.argtypes = [ctypes.c_void_p]
@@ -162,7 +181,12 @@ def send_file(path):
 
 
 def send_to_calculator(path, progress=lambda msg: None):
-    """Fait tout : vérifie usbipd, rattache à WSL si besoin, puis envoie."""
+    """Fait tout : vérifie usbipd, rattache à WSL si besoin, puis envoie.
+    Sous Windows natif : envoi direct par les bibliothèques de TiLP."""
+    if os.name == "nt":
+        progress("Sending to the TI-89 Titanium…")
+        send_file(path)
+        return
     dev = wsl_device()
     if dev is None:
         busid, state = usbipd_state()
