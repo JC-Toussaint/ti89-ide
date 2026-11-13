@@ -2,7 +2,9 @@
 import ctypes
 import os
 
-_LIB_PATH = os.path.join(os.path.dirname(__file__), "..", "core", "libti89core.so")
+# Bibliothèque du cœur C : libti89core.so sous Linux, ti89core.dll sous Windows
+_LIB_PATH = os.path.join(os.path.dirname(__file__), "..", "core",
+                         "ti89core.dll" if os.name == "nt" else "libti89core.so")
 
 RD_CB = ctypes.CFUNCTYPE(ctypes.c_uint, ctypes.c_uint, ctypes.c_int)
 WR_CB = ctypes.CFUNCTYPE(None, ctypes.c_uint, ctypes.c_int, ctypes.c_uint)

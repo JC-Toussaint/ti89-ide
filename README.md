@@ -72,6 +72,25 @@ The calculator operating system (AMS) is copyrighted by Texas Instruments and is
 and save it as `ROM/ti89tv310.rom` (4 MB, AMS 3.10), or point the `TI89_ROM`
 environment variable to it.
 
+## Windows
+
+A native Windows version is available as a zip package: unzip it, put your ROM in the
+`ROM` folder, and start `ti89-ide.exe` (no Python, no WSL needed). It contains the IDE,
+the emulator and a Windows build of GCC4TI whose output is identical, byte for byte, to
+the Linux one.
+
+Building the package from Linux / WSL (needs `mingw-w64` and Python 3 for Windows):
+
+```sh
+scripts/build_gcc4ti.sh             # Linux toolchain first (its headers and libraries are reused)
+scripts/build_gcc4ti_windows.sh     # GCC4TI cross-built for Windows into ./gcc4ti-win
+make -C emu89/core windows          # ti89core.dll
+scripts/package_windows.sh          # dist-windows/ti89-ide-windows.zip
+```
+
+Notes: the Windows toolchain is 32-bit (GCC 4.1.2 crashes as a 64-bit Windows program);
+sending to a real calculator on Windows uses TiLP for Windows and its USB driver.
+
 ## Usage
 
 ```sh

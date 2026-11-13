@@ -1,6 +1,7 @@
 """Éditeur de code C : numéros de ligne, coloration syntaxique, indentation automatique."""
 import re
 import tkinter as tk
+from .fonts import SANS, MONO
 import tkinter.font as tkfont
 
 THEME = {
@@ -60,7 +61,7 @@ class CodeEditor(tk.Frame):
         self.on_change = on_change
         self.on_cursor = on_cursor
         self.on_gutter_click = on_gutter_click
-        self.font = tkfont.Font(family="DejaVu Sans Mono", size=11)
+        self.font = tkfont.Font(family=MONO, size=11)
         self.breakpoints = set()
         self.language = "c"          # "c", "gas" (GNU as) ou "a68k"
         self.exec_line = None        # ligne où le programme est en pause (flèche dans la marge)

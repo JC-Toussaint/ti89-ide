@@ -1,6 +1,7 @@
 """Vue mémoire (vidage hexadécimal) de la calculatrice émulée."""
 import re
 import tkinter as tk
+from .fonts import SANS, MONO
 from tkinter import ttk, simpledialog
 
 BYTES_PER_ROW = 16
@@ -23,25 +24,25 @@ class MemoryView(tk.Frame):
         bar = tk.Frame(self, bg=COL["bg"])
         bar.pack(fill="x", padx=4, pady=(4, 2))
         tk.Label(bar, text="Address", bg=COL["bg"], fg=COL["muted"],
-                 font=("DejaVu Sans", 9)).pack(side="left")
+                 font=(SANS, 9)).pack(side="left")
         self.expr = tk.StringVar(value="4C00")
         e = tk.Entry(bar, textvariable=self.expr, width=22, bg="#1e1f22", fg=COL["fg"],
-                     insertbackground="white", relief="flat", font=("DejaVu Sans Mono", 10))
+                     insertbackground="white", relief="flat", font=(MONO, 10))
         e.pack(side="left", padx=4)
         e.bind("<Return>", lambda ev: self.go())
         ttk.Button(bar, text="Go", style="Small.TButton", command=self.go).pack(side="left")
         self.follow = tk.BooleanVar(value=False)
         tk.Checkbutton(bar, text="Follow", variable=self.follow, bg=COL["bg"], fg=COL["muted"],
                        selectcolor="#1e1f22", activebackground=COL["bg"], activeforeground="white",
-                       font=("DejaVu Sans", 9), bd=0, highlightthickness=0).pack(side="left", padx=6)
+                       font=(SANS, 9), bd=0, highlightthickness=0).pack(side="left", padx=6)
         for name in ("SP", "A0", "A1", "A2", "A3", "A4", "A5", "A6", "PC", "LCD"):
             ttk.Button(bar, text=name, style="Small.TButton", width=4,
                        command=lambda n=name: self.go("4C00" if n == "LCD" else n.lower())
                        ).pack(side="left", padx=1)
-        self.msg = tk.Label(bar, text="", bg=COL["bg"], fg=COL["err"], font=("DejaVu Sans", 9))
+        self.msg = tk.Label(bar, text="", bg=COL["bg"], fg=COL["err"], font=(SANS, 9))
         self.msg.pack(side="left", padx=8)
 
-        self.text = tk.Text(self, bg=COL["bg"], fg=COL["fg"], font=("DejaVu Sans Mono", 10),
+        self.text = tk.Text(self, bg=COL["bg"], fg=COL["fg"], font=(MONO, 10),
                             relief="flat", wrap="none", height=ROWS, cursor="arrow")
         self.text.pack(fill="both", expand=True, padx=4)
         self.text.tag_configure("addr", foreground=COL["addr"])
@@ -58,7 +59,7 @@ class MemoryView(tk.Frame):
         tk.Label(self, text="Double-click a byte to change it (RAM only).  Mouse wheel / PgUp / PgDn "
                             "to scroll.  Address: hex (4C00, $4C00, 0x4C00), register (a0, sp, pc), "
                             "label or global variable, e.g. a6-8.",
-                 bg=COL["bg"], fg=COL["muted"], font=("DejaVu Sans", 8), anchor="w").pack(fill="x", padx=4)
+                 bg=COL["bg"], fg=COL["muted"], font=(SANS, 8), anchor="w").pack(fill="x", padx=4)
 
     # ------------------------------------------------------------ adresses
     def _symbols(self):
