@@ -499,7 +499,8 @@ class IdeApp:
     def save(self):
         if not self.path:
             return self.save_as()
-        with open(self.path, "w", encoding="utf-8") as f:
+        # newline="\n" : fins de ligne Unix aussi sous Windows (sources partagées avec WSL, git)
+        with open(self.path, "w", encoding="utf-8", newline="\n") as f:
             f.write(self.editor.get())
         self._set_dirty(False)
         self._save_config()
