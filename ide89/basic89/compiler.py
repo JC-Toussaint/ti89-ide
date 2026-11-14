@@ -82,6 +82,7 @@ KEYWORDS = set("""
 AND AS BOX CALL CASE CIRCLE CLS CONST DELAY DIM DO ELSE ELSEIF END EXIT FILL FLIP FOR
 FUNCTION IF LINE LOCATE LOOP MOD NEXT NOT OR PRINT PSET RETURN SCREEN STEP SUB THEN TO
 UNTIL WAITFRAME WAITKEY WEND WHILE BUFFERED DIRECT SELECT IS TYPE INPUT INCLUDE COLOR GRAY4
+IMAGE SPRITE
 """.split())
 
 TYPES = {"INTEGER": "short", "LONG": "long", "BOOLEAN": "short", "FIXED": "fixed",
@@ -154,6 +155,45 @@ class Var:
         return f"(*bv_{self.name})" if self.byref else f"bv_{self.name}"
 
 
+# IMAGE pixels: transparent, white, light gray, dark gray, black (also 0 1 2 3)
+PIXELS = {".": None, " ": None, "w": 0, "W": 0, "0": 0, ":": 1, "1": 1, "+": 2, "2": 2,
+          "#": 3, "X": 3, "x": 3, "3": 3}
+
+
+class Image:
+    def __init__(self, name, line, display):
+        self.name, self.line, self.display = name, line, display
+        self.rows = []              # strings
+
+    def c_data(self):
+        """Tables for b89_sprite: for each column of 32 pixels, mask (0 = opaque),
+        light plane, dark plane, black and white."""
+        w, h = len(self.rows[0]), len(self.rows)
+        out = []
+        for s in range((w + 31) // 32):
+            tables = [[], [], [], []]
+            for row in self.rows:
+                mask, light, dark = 0xFFFFFFFF, 0, 0
+                for k in range(32):
+                    x = s * 32 + k
+                    c = PIXELS[row[x]] if x < w else None
+                    if c is None:
+                        continue
+                    bit = 1 << (31 - k)
+                    mask &= ~bit
+                    if c & 1:
+                        light |= bit
+                    if c & 2:
+                        dark |= bit
+                tables[0].append(mask)
+                tables[1].append(light)
+                tables[2].append(dark)
+                tables[3].append(light | dark)
+            for t in tables:
+                out += t
+        return w, h, (w + 31) // 32, out
+
+
 class Record:
     def __init__(self, name, line, display):
         self.name, self.line, self.display = name, line, display
@@ -192,6 +232,7 @@ class Compiler:
         self.consts = {}
         self.procs = {}
         self.records = {}
+        self.images = {}
         self.proc = None            # Proc being compiled (None: main program)
         self.locals = {}
         self.out = None             # current body (list of C lines)
@@ -244,7 +285,8 @@ class Compiler:
             raise CompileError(line, f"'{name}': $ is only used by the string functions "
                                      "(LEFT$...); declare text with DIM name AS STRING")
         if up in KEYWORDS or up in TYPES or up in BUILTINS or up in COLORS or up in STR_FUNCS or \
-                up in ("TRUE", "FALSE", "KEYDOWN", "INT", "ROUND", "SQR", "SIN", "COS") or \
+                up in ("TRUE", "FALSE", "KEYDOWN", "INT", "ROUND", "SQR", "SIN", "COS",
+                       "WIDTH", "HEIGHT", "COLLIDE") or \
                 up.startswith("KEY_"):
             raise CompileError(line, f"'{name}' is a reserved word")
         key = name.lower()
@@ -308,9 +350,40 @@ class Compiler:
     def prescan(self, toklines):
         """Reads the TYPEs (removed from the lines to compile), then registers the SUBs and
         FUNCTIONs, so they can be called before their definition."""
-        rest, rec = [], None
+        rest, rec, img = [], None, None
         for toks in toklines:
             line = toks[0].line
+            if img is not None:
+                if toks[0].is_("END") and len(toks) > 1 and toks[1].is_("IMAGE"):
+                    Parser(self, toks, 2).end()
+                    if not img.rows:
+                        raise CompileError(img.line, f"IMAGE {img.display} has no rows")
+                    img = None
+                    continue
+                if len(toks) != 1 or toks[0].kind != "str":
+                    raise CompileError(line, 'an IMAGE row is written between quotes, e.g. "..##.."')
+                row = toks[0].val
+                bad = next((c for c in row if c not in PIXELS), None)
+                if bad is not None:
+                    raise CompileError(line, f"'{bad}' is not a pixel: . (transparent) w (white) "
+                                             ": (light gray) + (dark gray) # (black), or 0 1 2 3")
+                if img.rows and len(row) != len(img.rows[0]):
+                    raise CompileError(line, f"all the rows of an IMAGE must have the same "
+                                             f"width ({len(img.rows[0])} here)")
+                if not 1 <= len(row) <= 160:
+                    raise CompileError(line, "an IMAGE is 1 to 160 pixels wide")
+                img.rows.append(row)
+                if len(img.rows) > 100:
+                    raise CompileError(line, "an IMAGE is at most 100 rows high")
+                continue
+            if toks[0].is_("IMAGE"):
+                if len(toks) != 2 or toks[1].kind != "id":
+                    raise CompileError(line, "expected IMAGE name")
+                name = toks[1].val
+                self.check_new_name(name, line, self.images)
+                img = Image(name.lower(), line, name)
+                self.images[img.name] = img
+                continue
             if rec is not None:
                 if toks[0].is_("END") and len(toks) > 1 and toks[1].is_("TYPE"):
                     Parser(self, toks, 2).end()
@@ -340,6 +413,8 @@ class Compiler:
             rest.append(toks)
         if rec is not None:
             raise CompileError(rec.line, f"TYPE {rec.display} without END TYPE")
+        if img is not None:
+            raise CompileError(img.line, f"IMAGE {img.display} without END IMAGE")
         for toks in rest:
             if toks[0].is_("SUB", "FUNCTION") and len(toks) > 1:
                 p = Parser(self, toks, 1)
@@ -367,6 +442,11 @@ class Compiler:
         if self.uses_gray:
             lines.append("#define B89_GRAY")
         lines += ['#include "b89rt.h"', ""]
+        for im in self.images.values():
+            w, h, slabs, data = im.c_data()
+            vals = ", ".join(f"0x{v:08X}" for v in data)
+            lines.append(f"static const unsigned long b89i_{im.name}_d[] = {{{vals}}};")
+            lines.append(f"static const b89img b89i_{im.name} = {{{w}, {h}, {slabs}, b89i_{im.name}_d}};")
         for r in self.records.values():
             lines.append("typedef struct {")
             for f in r.fields.values():
@@ -725,6 +805,22 @@ class Compiler:
             buffered = mode == "BUFFERED" or (gray and p.more() and p.expect_word("BUFFERED"))
             p.end()
             self.emit(line, f"b89_screen({int(gray)}, {int(bool(buffered))});")
+        elif word == "SPRITE":
+            if len(toks) < 6:
+                raise CompileError(line, "expected SPRITE image, x, y [, XOR]")
+            im = p.image()
+            p.expect_op(",")
+            x = conv(*p.num_expr(), "long")
+            p.expect_op(",")
+            y = conv(*p.num_expr(), "long")
+            a = [x, y]
+            xor = 0
+            if p.more():
+                p.expect_op(",")
+                p.expect_word("XOR")
+                xor = 1
+            p.end()
+            self.emit(line, f"b89_sprite(&b89i_{im.name}, {a[0]}, {a[1]}, {xor});")
         elif word == "COLOR":
             (c,) = p.args(1)
             self.emit(line, f"b89_color = {c};")
@@ -1280,6 +1376,33 @@ class Parser:
             return self.unary()
         return self.primary()
 
+    def image(self):
+        t = self.expect_id()
+        im = self.c.images.get(t.val.lower())
+        if im is None:
+            raise CompileError(self.line, f"'{t.val}' is not an IMAGE")
+        return im
+
+    def image_function(self, up):
+        self.expect_op("(")
+        if up in ("WIDTH", "HEIGHT"):
+            im = self.image()
+            self.expect_op(")")
+            return str(len(im.rows[0]) if up == "WIDTH" else len(im.rows)), "short"
+        a = self.image()                       # COLLIDE(img1, x1, y1, img2, x2, y2)
+        self.expect_op(",")
+        ax = conv(*self.num_expr(), "long")
+        self.expect_op(",")
+        ay = conv(*self.num_expr(), "long")
+        self.expect_op(",")
+        b = self.image()
+        self.expect_op(",")
+        bx = conv(*self.num_expr(), "long")
+        self.expect_op(",")
+        by = conv(*self.num_expr(), "long")
+        self.expect_op(")")
+        return f"b89_collide(&b89i_{a.name}, {ax}, {ay}, &b89i_{b.name}, {bx}, {by})", "short"
+
     def string_function(self, up):
         self.expect_op("(")
         args = self.expr_list(")", typed=True)
@@ -1379,6 +1502,8 @@ class Parser:
             return f"(_keytest({key}) != 0)", "short"
         if up in STR_FUNCS:
             return self.string_function(up)
+        if up in ("WIDTH", "HEIGHT", "COLLIDE"):
+            return self.image_function(up)
         if t.val.endswith("$") and t.val.lower() not in self.c.procs:
             raise CompileError(self.line, f"unknown function '{t.val}'")
         if up in ("ABS", "MIN", "MAX", "INT", "ROUND", "SQR", "SIN", "COS"):

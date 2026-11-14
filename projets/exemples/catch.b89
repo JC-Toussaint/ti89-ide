@@ -1,0 +1,81 @@
+' Catch - Basic89 example of sprites (IMAGE, SPRITE, COLLIDE) in grayscale
+' LEFT / RIGHT: move the basket. Catch the stars, avoid the bombs.  ESC: quit
+
+IMAGE basket
+  "#..............#"
+  "#+............+#"
+  ".#++++++++++++#."
+  ".#+:+:+:+:+:+:#."
+  "..############.."
+END IMAGE
+
+IMAGE star
+  "...#..."
+  "..#:#.."
+  "##:::##"
+  ".#:::#."
+  "#:#.#:#"
+END IMAGE
+
+IMAGE bomb
+  "....+."
+  "...+.."
+  ".####."
+  "######"
+  "##w###"
+  ".####."
+END IMAGE
+
+CONST N = 5
+TYPE Thing
+  x AS INTEGER
+  y AS FIXED
+  speed AS FIXED
+  bad AS BOOLEAN
+END TYPE
+
+DIM t(N) AS Thing
+DIM bx AS INTEGER = 72, score AS INTEGER, lives AS INTEGER = 3, i AS INTEGER
+
+SUB drop(k AS INTEGER)
+  t(k).x = RND(152)
+  t(k).y = -8 - RND(60)
+  t(k).speed = 0.6 + RND(10) / 10.0 + score / 40.0
+  t(k).bad = RND(4) = 0
+END SUB
+
+FOR i = 0 TO N
+  drop i
+NEXT
+SCREEN GRAY4 BUFFERED
+DO
+  IF KEYDOWN(KEY_LEFT) AND bx > 0 THEN bx -= 3
+  IF KEYDOWN(KEY_RIGHT) AND bx < 144 THEN bx += 3
+  CLS
+  BOX 0, 96, 159, 99, LIGHTGRAY FILL
+  FOR i = 0 TO N
+    t(i).y += t(i).speed
+    IF t(i).bad THEN
+      SPRITE bomb, t(i).x, t(i).y
+      IF COLLIDE(bomb, t(i).x, t(i).y, basket, bx, 90) THEN
+        lives -= 1
+        drop i
+      END IF
+    ELSE
+      SPRITE star, t(i).x, t(i).y
+      IF COLLIDE(star, t(i).x, t(i).y, basket, bx, 90) THEN
+        score += 1
+        drop i
+      END IF
+    END IF
+    IF t(i).y > 100 THEN drop i
+  NEXT
+  SPRITE basket, bx, 90
+  LOCATE 1, 1
+  PRINT "Score "; score; "   Lives "; lives
+  FLIP
+  WAITFRAME 32
+LOOP UNTIL lives = 0 OR KEYDOWN(KEY_ESC)
+LOCATE 6, 9
+PRINT "GAME OVER"
+WAITKEY

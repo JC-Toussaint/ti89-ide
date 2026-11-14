@@ -58,11 +58,14 @@ _BAS_TOKEN_RE = re.compile(
     r"(?P<comment>'[^\n]*|\bREM\b[^\n]*)"
     r"|(?P<string>\"[^\"\n]*\"?)"
     r"|(?P<number>&[Hh][0-9A-Fa-f]+|&[Bb][01]+|\b\d+\b)"
-    r"|(?P<word>\b[A-Za-z_]\w*\b)",
+    r"|(?P<word>\b[A-Za-z_]\w*\$?)",
     re.I)
 _BAS_TYPES = {"INTEGER", "LONG", "BOOLEAN"}
 _BAS_BUILTINS = {"KEYDOWN", "RND", "ABS", "MIN", "MAX", "ISIN", "ICOS", "GETKEY", "TICKS",
-                 "TRUE", "FALSE", "BLACK", "WHITE", "XOR", "LIGHTGRAY", "DARKGRAY"}
+                 "TRUE", "FALSE", "BLACK", "WHITE", "XOR", "LIGHTGRAY", "DARKGRAY",
+                 "WIDTH", "HEIGHT", "COLLIDE", "SQR", "SIN", "COS", "INT", "ROUND", "PI",
+                 "LEN", "LEFT$", "RIGHT$", "MID$", "STR$", "CHR$", "ASC", "INSTR", "VAL",
+                 "UCASE$", "LCASE$"}
 
 
 class CodeEditor(tk.Frame):

@@ -154,7 +154,7 @@ the speed of a C program. Every generated statement carries a `#line` directive,
 error messages **and the debugger** (breakpoints, stepping, variables) work on the lines of
 the Basic program. *File > New Basic89 Program* creates a small example; F5 runs, F6 debugs.
 Examples: `projets/exemples/balls.b89`, `projets/exemples/orbit.b89` (FIXED numbers, grayscale),
-`projets/exemples/guess.b89` (STRING, INPUT),
+`projets/exemples/guess.b89` (STRING, INPUT), `projets/exemples/catch.b89` (sprites),
 `projets/exemples/cube2.b89` (the 3D cube of `cube.c`).
 
 ```basic
@@ -185,7 +185,24 @@ included several times is read once); errors in it are reported with its name, a
 clicking them opens it. The debugger stops and steps only in the main file for now: the
 SUBs of an included file run as one step.
 
-Not yet: sprites, sound,
+Sprites: an `IMAGE name` ... `END IMAGE` block draws the picture in the source, one row
+per line between quotes: `.` transparent, `w` white, `:` light gray, `+` dark gray, `#`
+black (or `0 1 2 3`), any size up to 160x100. `SPRITE name, x, y [, XOR]` draws it (with
+its transparent pixels, clipped to the screen, in grayscale or in black and white),
+`COLLIDE(img1, x1, y1, img2, x2, y2)` tells whether two images drawn there touch (pixel
+by pixel), `WIDTH(img)`, `HEIGHT(img)`.
+
+```basic
+IMAGE star
+  "...#..."
+  "..#:#.."
+  "##:::##"
+END IMAGE
+SPRITE star, x, y
+IF COLLIDE(star, x, y, basket, bx, 90) THEN score += 1
+```
+
+Not yet: sound,
 saving data. Comments start with `'` or `REM`; names and keywords ignore case.
 
 ## Example game

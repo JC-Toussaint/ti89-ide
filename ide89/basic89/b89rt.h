@@ -260,6 +260,56 @@ B89_FN void b89_locate(short row, short col)
   MoveTo((col - 1) * 6, (row - 1) * 8);
 }
 
+/* ------------------------------------------------------------ sprites (IMAGE ... END IMAGE)
+   An image is cut in columns of 32 pixels; for each column, 4 tables of h rows:
+   mask (0 = opaque pixel), light plane, dark plane, black and white. */
+typedef struct { short w, h, slabs; const unsigned long *data; } b89img;
+
+B89_FN void b89_sprite(const b89img *im, short x, short y, short xor)
+{
+  short s, h = im->h;
+  const unsigned long *d = im->data;
+  if (y >= 100 || y + h <= 0 || x >= 160 || x + im->w <= 0)
+    return;
+  for (s = 0; s < im->slabs; s++, d += 4 * h, x += 32) {
+    if (x >= 160 || x + 32 <= 0)
+      continue;
+    if (b89_gray) {
+      short p;
+      for (p = 0; p < 2; p++) {
+        void *pl = b89_plane(p);
+        if (!xor)
+          ClipSprite32(x, y, h, d, pl, SPRT_AND);
+        ClipSprite32(x, y, h, d + (1 + p) * h, pl, xor ? SPRT_XOR : SPRT_OR);
+      }
+    } else {
+      void *scr = b89_buffer ? b89_buffer : LCD_MEM;
+      if (!xor)
+        ClipSprite32(x, y, h, d, scr, SPRT_AND);
+      ClipSprite32(x, y, h, d + 3 * h, scr, xor ? SPRT_XOR : SPRT_OR);
+    }
+  }
+}
+
+B89_FN short b89_opaque(const b89img *im, short x, short y)     /* pixel of the image */
+{
+  return !((im->data[(x >> 5) * 4 * im->h + y] >> (31 - (x & 31))) & 1);
+}
+
+/* COLLIDE: do two images, drawn at these places, have an opaque pixel in common? */
+B89_FN short b89_collide(const b89img *a, short ax, short ay, const b89img *b, short bx, short by)
+{
+  short x0 = ax > bx ? ax : bx, y0 = ay > by ? ay : by;
+  short x1 = ax + a->w < bx + b->w ? ax + a->w : bx + b->w;
+  short y1 = ay + a->h < by + b->h ? ay + a->h : by + b->h;
+  short x, y;
+  for (y = y0; y < y1; y++)
+    for (x = x0; x < x1; x++)
+      if (b89_opaque(a, x - ax, y - ay) && b89_opaque(b, x - bx, y - by))
+        return 1;
+  return 0;
+}
+
 /* ------------------------------------------------------------ math */
 static const short b89_qsin[65] = {
       0,   402,   804,  1205,  1606,  2006,  2404,  2801,
