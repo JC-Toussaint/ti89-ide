@@ -69,7 +69,7 @@ def tokenize_line(text, line):
 KEYWORDS = set("""
 AND AS BOX CALL CASE CIRCLE CLS CONST DELAY DIM DO ELSE ELSEIF END EXIT FILL FLIP FOR
 FUNCTION IF LINE LOCATE LOOP MOD NEXT NOT OR PRINT PSET RETURN SCREEN STEP SUB THEN TO
-UNTIL WAITFRAME WAITKEY WEND WHILE BUFFERED DIRECT
+UNTIL WAITFRAME WAITKEY WEND WHILE BUFFERED DIRECT SELECT IS
 """.split())
 
 TYPES = {"INTEGER": "short", "LONG": "long", "BOOLEAN": "short"}
@@ -187,7 +187,8 @@ class Compiler:
         return self.assemble(main, procs_code)
 
     def block_end(self, kind):
-        return {"IF": "END IF", "FOR": "NEXT", "DO": "LOOP", "WHILE": "WEND"}[kind]
+        return {"IF": "END IF", "FOR": "NEXT", "DO": "LOOP", "WHILE": "WEND",
+                "SELECT": "END SELECT"}[kind]
 
     def prescan(self, toklines):
         """Registers the SUBs and FUNCTIONs first, so they can be called before their definition."""
@@ -276,6 +277,10 @@ class Compiler:
         word = t0.val.upper() if t0.kind == "id" else None
         p = Parser(self, toks, 1)
 
+        if self.blocks and self.blocks[-1][0] == "SELECT" and self.blocks[-1][4] == 0 \
+                and word != "CASE" and not (word == "END" and len(toks) > 1 and toks[1].is_("SELECT")):
+            raise CompileError(line, "expected CASE after SELECT CASE")
+
         if word in ("SUB", "FUNCTION"):
             if self.proc:
                 raise CompileError(line, "SUB and FUNCTION cannot be nested")
@@ -345,6 +350,52 @@ class Compiler:
             self.indent -= 1
             self.emit_raw("} else {")
             self.indent += 1
+        elif word == "SELECT":
+            p.expect_word("CASE")
+            e, _ = p.expr()
+            p.end()
+            n = self.new_label()
+            self.emit(line, "{")
+            self.indent += 1
+            self.emit(line, f"long b89_s{n} __attribute__((unused)) = {e};")
+            # [kind, line, CASE ELSE seen, temp number, number of CASEs]
+            self.blocks.append(["SELECT", line, False, n, 0])
+        elif word == "CASE":
+            b = self.need_block("SELECT", line, "CASE")
+            if b[2]:
+                raise CompileError(line, "CASE after CASE ELSE")
+            if p.more() and p.peek().is_("ELSE"):
+                p.next()
+                p.end()
+                b[2] = True
+                if b[4] == 0:                 # only CASE ELSE: always executed
+                    self.emit(line, "{")
+                    self.indent += 1
+                else:
+                    self.indent -= 1
+                    self.emit(line, "} else {")
+                    self.indent += 1
+                b[4] += 1
+                return
+            cond = p.case_tests(f"b89_s{b[3]}")
+            if b[4] == 0:
+                self.emit(line, f"if ({cond}) {{")
+                self.indent += 1
+            else:
+                self.indent -= 1
+                self.emit(line, f"}} else if ({cond}) {{")
+                self.indent += 1
+            b[4] += 1
+        elif word == "END" and len(toks) > 1 and toks[1].is_("SELECT"):
+            b = self.need_block("SELECT", line, "END SELECT")
+            p.next()
+            p.end()
+            self.blocks.pop()
+            if b[4]:
+                self.indent -= 1
+                self.emit_raw("}")
+            self.indent -= 1
+            self.emit_raw("}")
         elif word == "END" and len(toks) > 1 and toks[1].is_("IF"):
             self.need_block("IF", line, "END IF")
             self.blocks.pop()
@@ -714,6 +765,31 @@ class Parser:
             return int(eval(e.replace("L", ""), {"__builtins__": {}}))
         except Exception:
             raise CompileError(self.line, "a constant value is expected here")
+
+    def case_tests(self, var):
+        """CASE 1, 3 TO 5, IS > 10  ->  C condition on the SELECT value."""
+        tests = []
+        while True:
+            if self.more() and self.peek().is_("IS"):
+                self.next()
+                ops = {"=": "==", "<>": "!=", "<": "<", ">": ">", "<=": "<=", ">=": ">="}
+                op = self.next()
+                if op.val not in ops:
+                    raise CompileError(self.line, f"expected a comparison after IS instead of '{op.val}'")
+                e, _ = self.add()
+                tests.append(f"{var} {ops[op.val]} {e}")
+            else:
+                a, _ = self.add()
+                if self.more() and self.peek().is_("TO"):
+                    self.next()
+                    b, _ = self.add()
+                    tests.append(f"({var} >= {a} && {var} <= {b})")
+                else:
+                    tests.append(f"{var} == {a}")
+            if not self.more():
+                break
+            self.expect_op(",")
+        return " || ".join(tests)
 
     # precedence: OR < AND < NOT < comparisons < + - < * / \ MOD < unary minus
     def condition(self):
