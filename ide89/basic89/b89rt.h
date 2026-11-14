@@ -51,9 +51,11 @@ B89_FN void b89_exit(void)
 B89_FN void b89_screen(short buffered)
 {
   if (buffered && !b89_buffer) {
-    b89_buffer = calloc(1, LCD_SIZE);
-    if (b89_buffer)
+    b89_buffer = malloc(LCD_SIZE);
+    if (b89_buffer) {
+      memcpy(b89_buffer, LCD_MEM, LCD_SIZE);   /* starts with what is on the screen */
       PortSet(b89_buffer, 239, 127);
+    }
   } else if (!buffered && b89_buffer) {
     PortRestore();
     free(b89_buffer);
@@ -164,6 +166,113 @@ B89_FN long b89_min(long a, long b) { return a < b ? a : b; }
 B89_FN long b89_max(long a, long b) { return a > b ? a : b; }
 B89_FN short b89_rnd(short n) { return n > 0 ? random(n) : 0; }
 
+/* ------------------------------------------------------------ STRING
+   A STRING variable is a char array of fixed size (256 bytes, or STRING * n). Results of
+   string expressions go to temporary buffers (b89_tN, 256 bytes) chosen by the compiler.
+   Assignments copy, and cut what does not fit. */
+#define B89_STRMAX 255
+
+B89_FN char *b89_sset(char *d, short cap, const char *s)    /* cap: size of d with the 0 */
+{
+  short n = strlen(s);
+  if (n > cap - 1)
+    n = cap - 1;
+  memmove(d, s, n);
+  d[n] = 0;
+  return d;
+}
+
+B89_FN char *b89_sappend(char *d, short cap, const char *s)
+{
+  short l = strlen(d);
+  b89_sset(d + l, cap - l, s);
+  return d;
+}
+
+B89_FN const char *b89_cat(char *t, const char *a, const char *b)
+{
+  b89_sset(t, B89_STRMAX + 1, a);
+  return b89_sappend(t, B89_STRMAX + 1, b);
+}
+
+B89_FN const char *b89_left(char *t, const char *s, long n)
+{
+  long l = strlen(s);
+  if (n < 0) n = 0;
+  if (n > l) n = l;
+  memmove(t, s, n);
+  t[n] = 0;
+  return t;
+}
+
+B89_FN const char *b89_right(char *t, const char *s, long n)
+{
+  long l = strlen(s);
+  if (n < 0) n = 0;
+  if (n > l) n = l;
+  return b89_sset(t, B89_STRMAX + 1, s + l - n);
+}
+
+B89_FN const char *b89_mid(char *t, const char *s, long start, long n)   /* start: 1 = first */
+{
+  long l = strlen(s);
+  if (start < 1) start = 1;
+  if (start > l) { t[0] = 0; return t; }
+  return b89_left(t, s + start - 1, n < 0 ? l : n);
+}
+
+B89_FN const char *b89_str(char *t, long v)
+{
+  sprintf(t, "%ld", v);
+  return t;
+}
+
+B89_FN const char *b89_chr(char *t, long c)
+{
+  t[0] = (char)c;
+  t[1] = 0;
+  return t;
+}
+
+B89_FN const char *b89_ucase(char *t, const char *s)
+{
+  char *d = t;
+  for (; *s; s++)
+    *d++ = (*s >= 'a' && *s <= 'z') ? *s - 32 : *s;
+  *d = 0;
+  return t;
+}
+
+B89_FN const char *b89_lcase(char *t, const char *s)
+{
+  char *d = t;
+  for (; *s; s++)
+    *d++ = (*s >= 'A' && *s <= 'Z') ? *s + 32 : *s;
+  *d = 0;
+  return t;
+}
+
+B89_FN long b89_instr(const char *s, const char *f)        /* position (1 = first) or 0 */
+{
+  const char *p = strstr(s, f);
+  return p ? p - s + 1 : 0;
+}
+
+/* INPUT: typed on the real screen (also in SCREEN BUFFERED mode) */
+B89_FN void b89_input(char *d, short cap)
+{
+  if (b89_buffer) {
+    b89_flip();
+    PortRestore();
+  }
+  getsn(d, cap);
+  putchar('\n');                             /* like PRINT: next line */
+  if (b89_buffer) {
+    memcpy(b89_buffer, LCD_MEM, LCD_SIZE);
+    PortSet(b89_buffer, 239, 127);
+  }
+}
+
 /* ------------------------------------------------------------ FIXED (16.16 fixed point)
    A FIXED is a long holding value * 65536: range -32768 .. 32767.99998, step 1/65536.
    The 68000 multiplies 16 x 16 bits in one instruction: the products are built from
@@ -252,6 +361,38 @@ B89_FN const char *b89_fstr(b89fixed v)
   while (*e == '0') *e-- = 0;
   if (*e == '.') *e = 0;
   return b;
+}
+
+/* number written in a string ("-12.5"): FIXED value (VAL of a decimal, INPUT) */
+B89_FN b89fixed b89_fval(const char *s)
+{
+  short neg = 0;
+  unsigned long ip = 0, fr = 0, div = 1;
+  while (*s == ' ') s++;
+  if (*s == '-') { neg = 1; s++; } else if (*s == '+') s++;
+  while (*s >= '0' && *s <= '9') ip = ip * 10 + (*s++ - '0');
+  if (*s == '.') {
+    s++;
+    while (*s >= '0' && *s <= '9' && div < 10000) { fr = fr * 10 + (*s++ - '0'); div *= 10; }
+  }
+  {
+    long v = (long)(ip << 16) + (long)((fr * 65536 + div / 2) / div);
+    return neg ? -v : v;
+  }
+}
+
+B89_FN long b89_input_long(void)
+{
+  char b[24];
+  b89_input(b, sizeof b);
+  return atol(b);
+}
+
+B89_FN b89fixed b89_input_fixed(void)
+{
+  char b[24];
+  b89_input(b, sizeof b);
+  return b89_fval(b);
 }
 
 #endif

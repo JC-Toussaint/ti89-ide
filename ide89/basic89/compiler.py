@@ -27,7 +27,7 @@ _TOKEN_RE = re.compile(r"""
   | (?P<comment>'.*)
   | (?P<num>&[Hh][0-9A-Fa-f]+|&[Bb][01]+|\d+\.\d*|\.\d+|\d+)
   | (?P<str>"[^"\n]*"?)
-  | (?P<id>[A-Za-z_][A-Za-z0-9_]*)
+  | (?P<id>[A-Za-z_][A-Za-z0-9_]*\$?)
   | (?P<op>\+=|-=|\*=|<>|<=|>=|[-+*/\\=<>(),;:.])
 """, re.X)
 
@@ -69,10 +69,14 @@ def tokenize_line(text, line):
 KEYWORDS = set("""
 AND AS BOX CALL CASE CIRCLE CLS CONST DELAY DIM DO ELSE ELSEIF END EXIT FILL FLIP FOR
 FUNCTION IF LINE LOCATE LOOP MOD NEXT NOT OR PRINT PSET RETURN SCREEN STEP SUB THEN TO
-UNTIL WAITFRAME WAITKEY WEND WHILE BUFFERED DIRECT SELECT IS TYPE
+UNTIL WAITFRAME WAITKEY WEND WHILE BUFFERED DIRECT SELECT IS TYPE INPUT
 """.split())
 
-TYPES = {"INTEGER": "short", "LONG": "long", "BOOLEAN": "short", "FIXED": "fixed"}
+TYPES = {"INTEGER": "short", "LONG": "long", "BOOLEAN": "short", "FIXED": "fixed",
+         "STRING": "str"}
+STR_FUNCS = {"LEFT$", "RIGHT$", "MID$", "STR$", "CHR$", "UCASE$", "LCASE$", "LEN", "ASC",
+             "INSTR", "VAL"}
+TMP_SIZE = 256              # temporary string buffers b89_tN
 
 KEYS = {"LEFT": "RR_LEFT", "RIGHT": "RR_RIGHT", "UP": "RR_UP", "DOWN": "RR_DOWN",
         "ENTER": "RR_ENTER", "ESC": "RR_ESC", "F1": "RR_F1", "F2": "RR_F2", "F3": "RR_F3",
@@ -121,15 +125,17 @@ def fixed_literal(text, line):
 
 def basic_type(ty):
     return ty[4:] if is_rec(ty) else {"short": "INTEGER", "long": "LONG",
-                                      "fixed": "FIXED"}.get(ty, ty)
+                                      "fixed": "FIXED", "str": "STRING"}.get(ty, ty)
 
 
 class Var:
     """A variable, a parameter or a record field. dims: list of upper bounds (arrays)."""
 
-    def __init__(self, name, ctype, dims=None, line=0, byref=False):
+    def __init__(self, name, ctype, dims=None, line=0, byref=False, cap=255):
         self.name, self.ctype, self.dims, self.line = name, ctype, dims, line
         self.byref = byref          # record parameter: passed by address
+        self.cap = cap              # STRING: maximum length
+        self.readonly = False       # STRING parameter
 
     @property
     def ref(self):
@@ -145,6 +151,7 @@ class Record:
 class Proc:
     def __init__(self, name, params, ret, line):
         self.name, self.params, self.ret, self.line = name, params, ret, line
+        self.cname = name.lower().replace("$", "_S")      # twice$ -> bs_twice_S
 
 
 def c_string(s, line):
@@ -180,6 +187,9 @@ class Compiler:
         self.end_used = False
         self.end_in_proc = False
         self.indent = 1
+        self.tmp_n = 0              # temporary string buffers used by the current statement
+        self.tmp_max = 0            # ... by the current SUB/FUNCTION (or the main program)
+        self.main_tmp_max = 0
 
     # ---------------------------------------------------------- output
     def emit(self, line, text):
@@ -196,6 +206,8 @@ class Compiler:
     # ---------------------------------------------------------- names
     def ctype(self, ty):
         """C type; a TYPE keeps the case of its name (bt_Enemy), shown so by the debugger."""
+        if ty == "str":
+            return "const char *"
         if ty == "fixed":
             return "b89fixed"
         return f"bt_{self.records[ty[4:]].display}" if is_rec(ty) else ty
@@ -214,7 +226,10 @@ class Compiler:
 
     def check_new_name(self, name, line, where):
         up = name.upper()
-        if up in KEYWORDS or up in TYPES or up in BUILTINS or up in COLORS or \
+        if name.endswith("$"):
+            raise CompileError(line, f"'{name}': $ is only used by the string functions "
+                                     "(LEFT$...); declare text with DIM name AS STRING")
+        if up in KEYWORDS or up in TYPES or up in BUILTINS or up in COLORS or up in STR_FUNCS or \
                 up in ("TRUE", "FALSE", "KEYDOWN", "INT", "ROUND", "SQR", "SIN", "COS") or \
                 up.startswith("KEY_"):
             raise CompileError(line, f"'{name}' is a reserved word")
@@ -240,6 +255,7 @@ class Compiler:
         if self.blocks:
             kind, line = self.blocks[-1][0], self.blocks[-1][1]
             raise CompileError(line, f"{kind} without its end ({self.block_end(kind)})")
+        self.main_tmp_max = self.tmp_max          # every SUB is closed: main program's count
         return self.assemble(main, procs_code)
 
     def block_end(self, kind):
@@ -268,7 +284,7 @@ class Compiler:
                 if ty == f"rec:{rec.name}":
                     raise CompileError(line, f"a TYPE cannot contain itself")
                 p.end()
-                rec.fields[f.val.lower()] = Var(f.val.lower(), ty, dims, line)
+                rec.fields[f.val.lower()] = Var(f.val.lower(), ty, dims, line, cap=p.cap)
                 continue
             if toks[0].is_("TYPE"):
                 if len(toks) != 2 or toks[1].kind != "id":
@@ -285,16 +301,21 @@ class Compiler:
             if toks[0].is_("SUB", "FUNCTION") and len(toks) > 1:
                 p = Parser(self, toks, 1)
                 name_tok = p.expect_id()
-                self.check_new_name(name_tok.val, name_tok.line, self.procs)
+                self.check_new_name(name_tok.val.rstrip("$"), name_tok.line, self.procs)
                 params = p.params()
                 ret = None
                 if toks[0].is_("FUNCTION"):
                     p.expect_word("AS")
                     ret = p.type_name()
+                    if name_tok.val.endswith("$") and ret != "str":
+                        raise CompileError(toks[0].line, f"{name_tok.val}: a name ending with $ "
+                                                         "is for a FUNCTION ... AS STRING")
                     if is_rec(ret):
                         raise CompileError(toks[0].line, "a FUNCTION cannot return a TYPE in "
                                                          "this version (use a SUB parameter)")
                 p.end()
+                if toks[0].is_("SUB") and name_tok.val.endswith("$"):
+                    raise CompileError(toks[0].line, "a SUB name cannot end with $")
                 self.procs[name_tok.val.lower()] = Proc(name_tok.val, params, ret, toks[0].line)
         return rest
 
@@ -312,6 +333,8 @@ class Compiler:
             lines.append(f"static {self.decl(v)};")
         if self.end_in_proc:
             lines.append("static JMP_BUF b89_jmp;       /* END in a SUB/FUNCTION jumps back to _main */")
+        for k in range(self.main_tmp_max):
+            lines.append(f"static char b89_t{k}[{TMP_SIZE}];")
         lines.append("")
         lines += procs_code
         lines += ["void _main(void)", "{", "  b89_init();"]
@@ -333,12 +356,16 @@ class Compiler:
         return "\n".join(final)
 
     def decl(self, v):
-        return f"{self.ctype(v.ctype)} bv_{v.name}" + "".join(f"[{d + 1}]" for d in v.dims or ())
+        dims = "".join(f"[{d + 1}]" for d in v.dims or ())
+        if v.ctype == "str":
+            return f"char bv_{v.name}{dims}[{v.cap + 1}]"
+        return f"{self.ctype(v.ctype)} bv_{v.name}{dims}"
 
     def proc_header(self, p):
-        args = ", ".join(f"{self.ctype(t)} {'*' if is_rec(t) else ''}bv_{n.lower()}"
+        args = ", ".join(f"{self.ctype(t)}{' *' if is_rec(t) else '' if t == 'str' else ' '}bv_{n.lower()}"
                          for n, t in p.params) or "void"
-        return f"static {self.ctype(p.ret) if p.ret else 'void'} bs_{p.name.lower()}({args})"
+        ret = self.ctype(p.ret) if p.ret else "void"
+        return f"static {ret}{'' if ret.endswith('*') else ' '}bs_{p.cname}({args})"
 
     # ---------------------------------------------------------- statements
     def statement_line(self, toks, procs_code):
@@ -379,6 +406,7 @@ class Compiler:
         line = t0.line
         word = t0.val.upper() if t0.kind == "id" else None
         p = Parser(self, toks, 1)
+        self.tmp_n = 0
 
         if self.blocks and self.blocks[-1][0] == "SELECT" and self.blocks[-1][4] == 0 \
                 and word != "CASE" and not (word == "END" and len(toks) > 1 and toks[1].is_("SELECT")):
@@ -392,6 +420,9 @@ class Compiler:
             self.proc = self.procs[toks[1].val.lower()]
             self.locals = {n.lower(): Var(n.lower(), t, byref=is_rec(t))
                            for n, t in self.proc.params}
+            for v in self.locals.values():
+                v.readonly = v.ctype == "str"
+            self.main_tmp_max, self.tmp_max = self.tmp_max, 0
             self.saved_out, self.out = self.out, []
             self.proc_line = line
             self.indent = 1
@@ -408,10 +439,15 @@ class Compiler:
             for v in self.locals.values():
                 if v.name not in {n.lower() for n, _ in self.proc.params}:
                     code.append(f"  {self.decl(v)};")
+            for k in range(self.tmp_max):
+                code.append(f"  char b89_t{k}[{TMP_SIZE}];")
+            if self.proc.ret == "str":
+                code.append(f"  static char b89_r[{TMP_SIZE}];     /* the returned STRING */")
+            self.tmp_max = self.main_tmp_max
             code += body
             self.out = code
             if self.proc.ret:
-                self.emit(line, "return 0;")
+                self.emit(line, 'return "";' if self.proc.ret == "str" else "return 0;")
             self.out.append("}")
             self.out.append("#line RESET")
             procs_code += self.out
@@ -456,12 +492,17 @@ class Compiler:
             self.indent += 1
         elif word == "SELECT":
             p.expect_word("CASE")
-            e, sty = p.num_expr()
+            e, sty = p.expr()
+            if sty != "str":
+                p.num(sty)
             p.end()
             n = self.new_label()
             self.emit(line, "{")
             self.indent += 1
-            self.emit(line, f"long b89_s{n} __attribute__((unused)) = {e};")
+            if sty == "str":
+                self.emit(line, f"char b89_s{n}[{TMP_SIZE}]; b89_sset(b89_s{n}, {TMP_SIZE}, {e});")
+            else:
+                self.emit(line, f"long b89_s{n} __attribute__((unused)) = {e};")
             # [kind, line, CASE ELSE seen, temp number, number of CASEs]
             self.blocks.append(["SELECT", line, False, n, 0, sty])
         elif word == "CASE":
@@ -574,7 +615,8 @@ class Compiler:
             if what in ("SUB", "FUNCTION"):
                 if not self.proc or (what == "SUB") != (self.proc.ret is None):
                     raise CompileError(line, f"EXIT {what} outside a {what}")
-                self.emit(line, "return;" if what == "SUB" else "return 0;")
+                self.emit(line, "return;" if what == "SUB" else
+                          'return "";' if self.proc.ret == "str" else "return 0;")
             else:
                 b = next((b for b in reversed(self.blocks) if b[0] == what), None)
                 if b is None:
@@ -584,11 +626,30 @@ class Compiler:
         elif word == "RETURN":
             if not self.proc or self.proc.ret is None:
                 raise CompileError(line, "RETURN value is only allowed in a FUNCTION")
-            e, ety = p.num_expr()
+            e, ety = p.expr()
             p.end()
-            self.emit(line, f"return {conv(e, ety, self.proc.ret)};")
+            p.same_kind(self.proc.ret, ety, "RETURN")
+            if ety == "str":
+                self.emit(line, f"return b89_sset(b89_r, sizeof b89_r, {e});")
+            else:
+                self.emit(line, f"return {conv(e, ety, self.proc.ret)};")
         elif word == "PRINT":
             self.print_stmt(p, line)
+        elif word == "INPUT":
+            if p.more() and p.peek().kind == "str":
+                prompt = c_string(p.next().val, line).replace("%", "%%")
+                p.expect_op(";") if p.peek().is_(";") else p.expect_op(",")
+                self.emit(line, f'printf("{prompt}");')
+            name = p.expect_id()
+            target, ty = p.lvalue(name)
+            p.end()
+            if ty == "str":
+                p.writable(name)
+                self.emit(line, f"b89_input({target}, sizeof({target}));")
+            else:
+                p.num(ty)
+                fn = "b89_input_fixed()" if ty == "fixed" else "b89_input_long()"
+                self.emit(line, f"{target} = {conv(fn, 'fixed' if ty == 'fixed' else 'long', ty)};")
         elif word == "CLS":
             p.end()
             self.emit(line, "clrscr();")
@@ -658,17 +719,23 @@ class Compiler:
             dims = p.dims()
             p.expect_word("AS")
             ctype = p.type_name()
-            v = Var(name.val.lower(), ctype, dims, line)
+            v = Var(name.val.lower(), ctype, dims, line, cap=p.cap)
             scope[v.name] = v
             if p.more() and p.peek().is_("="):
                 if dims or is_rec(ctype):
                     raise CompileError(line, "an array or a TYPE variable cannot be "
                                              "initialized with =")
                 p.next()
-                e, ety = p.num_expr()
-                self.emit(line, f"bv_{v.name} = {conv(e, ety, ctype)};")
+                e, ety = p.expr()
+                p.same_kind(ctype, ety, "DIM")
+                if ctype == "str":
+                    self.emit(line, f"b89_sset(bv_{v.name}, sizeof bv_{v.name}, {e});")
+                else:
+                    self.emit(line, f"bv_{v.name} = {conv(e, ety, ctype)};")
             elif dims or is_rec(ctype):  # DIM sets to 0, also when the program runs again
                 self.emit(line, f"memset(&bv_{v.name}, 0, sizeof bv_{v.name});")
+            elif ctype == "str":
+                self.emit(line, f"bv_{v.name}[0] = 0;")
             else:
                 self.emit(line, f"bv_{v.name} = 0;")
             if not p.more():
@@ -678,7 +745,7 @@ class Compiler:
     def for_stmt(self, p, line):
         var_tok = p.expect_id()
         ref, ty = p.lvalue(var_tok)
-        if is_rec(ty):
+        if is_rec(ty) or ty == "str":
             raise CompileError(line, "the FOR counter must be a number")
         p.expect_op("=")
         start, t1 = p.num_expr()
@@ -724,11 +791,17 @@ class Compiler:
                 newline = False
                 continue
             newline = True
-            if t.kind == "str":
-                p.next()
+            nxt = p.toks[p.i + 1] if p.i + 1 < len(p.toks) else None
+            if t.kind == "str" and (nxt is None or nxt.is_(";", ",")):
+                p.next()                     # plain text: written into the format
                 fmt.append(c_string(t.val, line).replace("%", "%%"))
             else:
-                e, ty = p.num_expr()
+                e, ty = p.expr()
+                if ty == "str":
+                    fmt.append("%s")
+                    args.append(e)
+                    continue
+                p.num(ty)
                 if ty == "fixed":
                     fmt.append("%s")
                     args.append(f"b89_fstr({e})")
@@ -754,7 +827,7 @@ class Compiler:
         if paren:
             p.expect_op(")")
         p.end()
-        self.emit(line, f"bs_{proc.name.lower()}({p.call_args(proc, args)});")
+        self.emit(line, f"bs_{proc.cname}({p.call_args(proc, args)});")
 
     def assignment(self, name_tok, p, line):
         if name_tok.val.lower() in self.consts:
@@ -768,7 +841,14 @@ class Compiler:
             raise CompileError(line, f"expected = after {name_tok.val}")
         e, ety = p.expr()
         p.end()
-        if is_rec(ty) or is_rec(ety):
+        if ty == "str" or ety == "str":
+            p.same_kind(ty, ety, "=")
+            p.writable(name_tok)
+            if op.val not in ("=", "+="):
+                raise CompileError(line, f"{op.val} cannot be used with a STRING (= or +=)")
+            fn = "b89_sset" if op.val == "=" else "b89_sappend"
+            self.emit(line, f"{fn}({target}, sizeof({target}), {e});")
+        elif is_rec(ty) or is_rec(ety):
             if op.val != "=" or ty != ety:
                 raise CompileError(line, f"cannot assign {self.tname(ety)} to {self.tname(ty)}")
             self.emit(line, f"{target} = {e};")
@@ -787,6 +867,7 @@ class Parser:
 
     def __init__(self, comp, toks, start):
         self.c, self.toks, self.i = comp, toks, start
+        self.cap = 255
         self.line = toks[0].line
 
     def more(self):
@@ -827,6 +908,12 @@ class Parser:
     def type_name(self):
         t = self.next()
         ty = TYPES.get(t.val.upper())
+        self.cap = 255
+        if ty == "str" and self.more() and self.peek().is_("*"):
+            self.next()
+            self.cap = self.const_expr()
+            if not 1 <= self.cap <= 255:
+                raise CompileError(self.line, "STRING * n: n must be between 1 and 255")
         if ty:
             return ty
         if t.kind == "id" and t.val.lower() in self.c.records:
@@ -900,7 +987,12 @@ class Parser:
                                           f"{len(args)} given")
         out = []
         for (pname, pty), (code, ty) in zip(proc.params, args):
-            if is_rec(pty) or is_rec(ty):
+            if pty == "str" or ty == "str":
+                if pty != ty:
+                    raise CompileError(self.line, f"{proc.name}: '{pname}' must be "
+                                                  f"{self.c.tname(pty)}, not {self.c.tname(ty)}")
+                out.append(code)
+            elif is_rec(pty) or is_rec(ty):
                 if pty != ty:
                     raise CompileError(self.line, f"{proc.name}: '{pname}' must be "
                                                   f"{self.c.tname(pty)}, not {self.c.tname(ty)}")
@@ -916,7 +1008,33 @@ class Parser:
         e, ty = self.expr()
         return e, self.num(ty)
 
+    def same_kind(self, to, frm, what):
+        """Text and numbers do not mix: STRING only with STRING."""
+        if (to == "str") != (frm == "str"):
+            act = "assign" if what in ("=", "DIM") else f"{what}: use"
+            raise CompileError(self.line, f"cannot {act} {self.c.tname(frm)} "
+                                          f"{'to' if act == 'assign' else 'as'} {self.c.tname(to)} "
+                                          "(STR$() and VAL() convert)")
+
+    def writable(self, name_tok):
+        v = self.c.locals.get(name_tok.val.lower()) if self.c.proc else None
+        if v is not None and v.readonly:
+            raise CompileError(self.line, f"'{name_tok.val}' is a STRING parameter: it cannot "
+                                          "be changed (copy it to a local variable)")
+
+    def tmp(self):
+        """A temporary string buffer for the current statement."""
+        n = self.c.tmp_n
+        self.c.tmp_n += 1
+        self.c.tmp_max = max(self.c.tmp_max, self.c.tmp_n)
+        if self.c.tmp_n > 24:
+            raise CompileError(self.line, "string expression too complex: split it")
+        return f"b89_t{n}"
+
     def num(self, ty):
+        if ty == "str":
+            raise CompileError(self.line, "a STRING cannot be used here (VAL() converts text "
+                                          "to a number)")
         if is_rec(ty):
             raise CompileError(self.line, f"a {self.c.tname(ty)} variable cannot be used here "
                                           "(use one of its fields)")
@@ -961,12 +1079,14 @@ class Parser:
     def const_expr(self):
         """A constant integer (array bounds)."""
         v, ty = self.const_value()
-        if ty == "fixed":
+        if ty not in ("short", "long"):
             raise CompileError(self.line, "an integer constant is expected here")
         return v
 
     def const_value(self):
         """(value, type) of a constant expression; a FIXED value is stored * 65536."""
+        if self.more() and self.peek().kind == "str" and self.i + 1 == len(self.toks):
+            return f'"{c_string(self.next().val, self.line)}"', "str"
         e, ty = self.num_expr()
         try:
             return int(eval(e.replace("L", "").replace("/", "//"), {"__builtins__": {}})), ty
@@ -1041,6 +1161,16 @@ class Parser:
 
     def arith(self, a, ta, op, b, tb):
         """a op b with the type rules: INTEGER < LONG < FIXED (FIXED if one side is)."""
+        cmp0 = {"=": "==", "<>": "!=", "<": "<", ">": ">", "<=": "<=", ">=": ">="}
+        if ta == "str" and tb == "str":
+            if op == "+":
+                return f"b89_cat({self.tmp()}, {a}, {b})", "str"
+            if op in cmp0:
+                return f"(strcmp({a}, {b}) {cmp0[op]} 0)", "short"
+            raise CompileError(self.line, f"'{op}' cannot be used with STRINGs (+ joins them)")
+        if "str" in (ta, tb):
+            raise CompileError(self.line, "text and numbers cannot be mixed "
+                                          "(STR$() and VAL() convert)")
         self.num(ta), self.num(tb)
         cmp = {"=": "==", "<>": "!=", "<": "<", ">": ">", "<=": "<=", ">=": ">="}
         if "fixed" in (ta, tb):
@@ -1093,6 +1223,46 @@ class Parser:
             return self.unary()
         return self.primary()
 
+    def string_function(self, up):
+        self.expect_op("(")
+        args = self.expr_list(")", typed=True)
+        self.expect_op(")")
+        kinds = {"LEFT$": "sn", "RIGHT$": "sn", "MID$": "sn", "STR$": "n", "CHR$": "n",
+                 "UCASE$": "s", "LCASE$": "s", "LEN": "s", "ASC": "s", "INSTR": "ss",
+                 "VAL": "s"}[up]
+        if up == "MID$" and len(args) == 3:
+            kinds = "snn"
+        if len(args) != len(kinds):
+            want = "2 or 3" if up == "MID$" else str(len(kinds))
+            raise CompileError(self.line, f"{up} takes {want} argument(s), {len(args)} given")
+        a = []
+        for k, (code, ty) in zip(kinds, args):
+            if k == "s":
+                if ty != "str":
+                    raise CompileError(self.line, f"{up}: a STRING is expected, not {self.c.tname(ty)}")
+                a.append(code)
+            else:
+                self.num(ty)
+                a.append(code if up == "STR$" else conv(code, ty, "long"))
+        if up == "STR$":
+            ty = args[0][1]
+            if ty == "fixed":
+                return f"b89_sset({self.tmp()}, {TMP_SIZE}, b89_fstr({a[0]}))", "str"
+            return f"b89_str({self.tmp()}, {a[0]})", "str"
+        if up == "LEN":
+            return f"((short)strlen({a[0]}))", "short"
+        if up == "ASC":
+            return f"((short)(unsigned char)({a[0]})[0])", "short"
+        if up == "INSTR":
+            return f"b89_instr({a[0]}, {a[1]})", "long"
+        if up == "VAL":
+            return f"b89_fval({a[0]})", "fixed"
+        if up == "MID$":
+            return f"b89_mid({self.tmp()}, {a[0]}, {a[1]}, {a[2] if len(a) > 2 else '-1'})", "str"
+        fn = {"LEFT$": "b89_left", "RIGHT$": "b89_right", "CHR$": "b89_chr",
+              "UCASE$": "b89_ucase", "LCASE$": "b89_lcase"}[up]
+        return f"{fn}({self.tmp()}, {', '.join(a)})", "str"
+
     def typed_builtin(self, up):
         """Functions whose result follows the type of their arguments (FIXED or integer)."""
         self.expect_op("(")
@@ -1127,7 +1297,7 @@ class Parser:
                 int(v[2:], 2) if v[:2].upper() == "&B" else int(v)
             return (f"{n}L", "long") if n > 32767 else (str(n), "short")
         if t.kind == "str":
-            raise CompileError(self.line, "text is only allowed in PRINT in this version")
+            return f'"{c_string(t.val, self.line)}"', "str"
         if t.is_("("):
             e, ty = self.expr()
             self.expect_op(")")
@@ -1150,6 +1320,10 @@ class Parser:
                                               "KEY_ENTER, KEY_ESC, KEY_F1...)")
             self.expect_op(")")
             return f"(_keytest({key}) != 0)", "short"
+        if up in STR_FUNCS:
+            return self.string_function(up)
+        if t.val.endswith("$") and t.val.lower() not in self.c.procs:
+            raise CompileError(self.line, f"unknown function '{t.val}'")
         if up in ("ABS", "MIN", "MAX", "INT", "ROUND", "SQR", "SIN", "COS"):
             return self.typed_builtin(up)
         if up in BUILTINS:
@@ -1165,6 +1339,8 @@ class Parser:
         key = t.val.lower()
         if key in self.c.consts:
             v, cty = self.c.consts[key]
+            if cty == "str":
+                return v, "str"
             if cty == "fixed":
                 return f"({v}L)", "fixed"
             return (f"{v}L", "long") if abs(v) > 32767 else (f"({v})" if v < 0 else str(v), "short")
@@ -1177,7 +1353,12 @@ class Parser:
                 self.next()
                 a = self.expr_list(")", typed=True)
                 self.expect_op(")")
-            return f"bs_{key}({self.call_args(proc, a)})", proc.ret
+            call = f"bs_{proc.cname}({self.call_args(proc, a)})"
+            if proc.ret == "str":
+                # copied at once: a second call in the same expression reuses the
+                # function's result buffer
+                return f"b89_sset({self.tmp()}, {TMP_SIZE}, {call})", "str"
+            return call, proc.ret
         return self.lvalue(t)
 
 

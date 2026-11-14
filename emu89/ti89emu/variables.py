@@ -73,6 +73,8 @@ def display_name(nm):
     belong to the Basic89 runtime and its temporaries and are hidden (None)."""
     if nm.startswith("b89_"):
         return None
+    if nm.startswith("bs_") and nm.endswith("_S"):        # FUNCTION twice$
+        return nm[3:-2] + "$"
     if nm.startswith(("bv_", "bs_", "bt_")):
         return nm[3:]
     return nm[1:] if nm.startswith("__") else nm

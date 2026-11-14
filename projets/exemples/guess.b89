@@ -1,0 +1,27 @@
+' Guess the number - Basic89 example of STRING and INPUT
+' The calculator picks a number between 1 and 100: find it.
+
+DIM name AS STRING * 12, answer AS STRING * 3
+DIM secret AS INTEGER, guess AS INTEGER, tries AS INTEGER
+
+FUNCTION hint$(g AS INTEGER, s AS INTEGER) AS STRING
+  IF g < s THEN RETURN "higher"
+  RETURN "lower"
+END FUNCTION
+
+CLS
+INPUT "Your name? "; name
+IF LEN(name) = 0 THEN name = "player"
+DO
+  secret = 1 + RND(100)
+  tries = 0
+  PRINT "Hello " + UCASE$(LEFT$(name, 1)) + MID$(name, 2) + "!"
+  DO
+    INPUT "Guess (1-100)? "; guess
+    tries += 1
+    IF guess <> secret THEN PRINT STR$(guess) + ": " + hint$(guess, secret)
+  LOOP UNTIL guess = secret
+  PRINT "Found in "; tries; " tries"
+  INPUT "Again (y/n)? "; answer
+  CLS
+LOOP WHILE LCASE$(LEFT$(answer, 1)) = "y"
