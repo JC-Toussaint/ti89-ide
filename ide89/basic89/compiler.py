@@ -89,7 +89,7 @@ BUILTINS = {
     "MAX": (2, "b89_max({0}, {1})", "long"),
     "ISIN": (1, "b89_isin({0})", "short"),
     "ICOS": (1, "b89_icos({0})", "short"),
-    "GETKEY": (0, "ngetchx()", "short"),
+    "GETKEY": (0, "b89_getkey()", "short"),
     "TICKS": (0, "((long)b89_ticks)", "long"),
 }
 
@@ -134,6 +134,7 @@ class Compiler:
         self.blocks = []
         self.label_n = 0
         self.end_used = False
+        self.end_in_proc = False
         self.indent = 1
 
     # ---------------------------------------------------------- output
@@ -212,11 +213,17 @@ class Compiler:
             lines.append(self.proc_header(p) + ";")
         for v in self.globals.values():
             lines.append(f"static {self.decl(v)};")
+        if self.end_in_proc:
+            lines.append("static JMP_BUF b89_jmp;       /* END in a SUB/FUNCTION jumps back to _main */")
         lines.append("")
         lines += procs_code
         lines += ["void _main(void)", "{", "  b89_init();"]
+        if self.end_in_proc:
+            lines.append("  if (!setjmp(b89_jmp)) {")
         lines += main
         lines.append("#line RESET")
+        if self.end_in_proc:
+            lines.append("  }")
         if self.end_used:
             lines.append("b89_end:")
         lines += ["  b89_exit();", "}", ""]
@@ -404,10 +411,12 @@ class Compiler:
         elif word == "END":
             p.end()
             if self.proc:
-                raise CompileError(line, "END (stop the program) is only allowed in the main "
-                                         "program in this version")
-            self.end_used = True
-            self.emit(line, "goto b89_end;")
+                # from a SUB/FUNCTION: back to _main (setjmp below), which cleans up
+                self.end_in_proc = True
+                self.emit(line, "longjmp(b89_jmp, 1);")
+            else:
+                self.end_used = True
+                self.emit(line, "goto b89_end;")
         elif word == "FOR":
             self.for_stmt(p, line)
         elif word == "NEXT":
@@ -515,7 +524,7 @@ class Compiler:
             self.emit(line, f"b89_waitframe({fps});")
         elif word == "WAITKEY":
             p.end()
-            self.emit(line, "ngetchx();")
+            self.emit(line, "b89_getkey();")
         elif word == "DELAY":
             (ms,) = p.args(1)
             self.emit(line, f"b89_delay({ms});")

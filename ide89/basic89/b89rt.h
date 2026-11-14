@@ -67,6 +67,14 @@ B89_FN void b89_flip(void)
     memcpy(LCD_MEM, b89_buffer, LCD_SIZE);
 }
 
+/* WAITKEY / GETKEY: show the hidden screen first (SCREEN BUFFERED), otherwise the
+   program would wait in front of an empty screen */
+B89_FN short b89_getkey(void)
+{
+  b89_flip();
+  return ngetchx();
+}
+
 B89_FN void b89_waitframe(short fps)
 {
   if (fps < 1)
