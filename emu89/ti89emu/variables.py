@@ -73,7 +73,7 @@ def display_name(nm):
     belong to the Basic89 runtime and its temporaries and are hidden (None)."""
     if nm.startswith("b89_"):
         return None
-    if nm.startswith(("bv_", "bs_")):
+    if nm.startswith(("bv_", "bs_", "bt_")):
         return nm[3:]
     return nm[1:] if nm.startswith("__") else nm
 
@@ -179,6 +179,8 @@ class VariableReader:
             return self.type_name(self._type(t)) + "".join(f"[{d}]" for d in self._dims(t))
         if n:
             name = n.value.decode("latin-1")
+            if name.startswith("bt_"):           # TYPE of a Basic89 program
+                return name[3:]
             prefix = {"DW_TAG_structure_type": "struct ", "DW_TAG_union_type": "union ",
                       "DW_TAG_enumeration_type": "enum "}.get(tag, "")
             return prefix + name
@@ -333,7 +335,7 @@ class VariableReader:
                 out = []
                 for m in members:
                     mn = m.attributes.get("DW_AT_name")
-                    mname = mn.value.decode("latin-1") if mn else "?"
+                    mname = (display_name(mn.value.decode("latin-1")) or "?") if mn else "?"
                     off = 0
                     loc = m.attributes.get("DW_AT_data_member_location")
                     if loc is not None:

@@ -28,7 +28,7 @@ _TOKEN_RE = re.compile(r"""
   | (?P<num>&[Hh][0-9A-Fa-f]+|&[Bb][01]+|\d+)
   | (?P<str>"[^"\n]*"?)
   | (?P<id>[A-Za-z_][A-Za-z0-9_]*)
-  | (?P<op>\+=|-=|\*=|<>|<=|>=|[-+*/\\=<>(),;:])
+  | (?P<op>\+=|-=|\*=|<>|<=|>=|[-+*/\\=<>(),;:.])
 """, re.X)
 
 
@@ -69,7 +69,7 @@ def tokenize_line(text, line):
 KEYWORDS = set("""
 AND AS BOX CALL CASE CIRCLE CLS CONST DELAY DIM DO ELSE ELSEIF END EXIT FILL FLIP FOR
 FUNCTION IF LINE LOCATE LOOP MOD NEXT NOT OR PRINT PSET RETURN SCREEN STEP SUB THEN TO
-UNTIL WAITFRAME WAITKEY WEND WHILE BUFFERED DIRECT SELECT IS
+UNTIL WAITFRAME WAITKEY WEND WHILE BUFFERED DIRECT SELECT IS TYPE
 """.split())
 
 TYPES = {"INTEGER": "short", "LONG": "long", "BOOLEAN": "short"}
@@ -94,9 +94,31 @@ BUILTINS = {
 }
 
 
+# Types: "short" (INTEGER, BOOLEAN), "long" (LONG), "rec:<name>" (a TYPE ... END TYPE)
+def is_rec(ty):
+    return ty.startswith("rec:")
+
+
+def basic_type(ty):
+    return ty[4:] if is_rec(ty) else {"short": "INTEGER", "long": "LONG"}.get(ty, ty)
+
+
 class Var:
-    def __init__(self, name, ctype, size=None, line=0):
-        self.name, self.ctype, self.size, self.line = name, ctype, size, line
+    """A variable, a parameter or a record field. dims: list of upper bounds (arrays)."""
+
+    def __init__(self, name, ctype, dims=None, line=0, byref=False):
+        self.name, self.ctype, self.dims, self.line = name, ctype, dims, line
+        self.byref = byref          # record parameter: passed by address
+
+    @property
+    def ref(self):
+        return f"(*bv_{self.name})" if self.byref else f"bv_{self.name}"
+
+
+class Record:
+    def __init__(self, name, line, display):
+        self.name, self.line, self.display = name, line, display
+        self.fields = {}            # name -> Var
 
 
 class Proc:
@@ -128,6 +150,7 @@ class Compiler:
         self.globals = {}
         self.consts = {}
         self.procs = {}
+        self.records = {}
         self.proc = None            # Proc being compiled (None: main program)
         self.locals = {}
         self.out = None             # current body (list of C lines)
@@ -150,6 +173,14 @@ class Compiler:
         return self.label_n
 
     # ---------------------------------------------------------- names
+    def ctype(self, ty):
+        """C type; a TYPE keeps the case of its name (bt_Enemy), shown so by the debugger."""
+        return f"bt_{self.records[ty[4:]].display}" if is_rec(ty) else ty
+
+    def tname(self, ty):
+        """Type name as written in the program (INTEGER, LONG, or the TYPE's name)."""
+        return self.records[ty[4:]].display if is_rec(ty) else basic_type(ty)
+
     def lookup(self, name, line):
         key = name.lower()
         if self.proc and key in self.locals:
@@ -174,7 +205,7 @@ class Compiler:
             t = tokenize_line(text, i)
             if t:
                 toklines.append(t)
-        self.prescan(toklines)
+        toklines = self.prescan(toklines)
         main = []
         self.out = main
         procs_code = []
@@ -192,8 +223,41 @@ class Compiler:
                 "SELECT": "END SELECT"}[kind]
 
     def prescan(self, toklines):
-        """Registers the SUBs and FUNCTIONs first, so they can be called before their definition."""
+        """Reads the TYPEs (removed from the lines to compile), then registers the SUBs and
+        FUNCTIONs, so they can be called before their definition."""
+        rest, rec = [], None
         for toks in toklines:
+            line = toks[0].line
+            if rec is not None:
+                if toks[0].is_("END") and len(toks) > 1 and toks[1].is_("TYPE"):
+                    Parser(self, toks, 2).end()
+                    if not rec.fields:
+                        raise CompileError(rec.line, f"TYPE {rec.display} has no field")
+                    rec = None
+                    continue
+                p = Parser(self, toks, 0)
+                f = p.expect_id()
+                self.check_new_name(f.val, line, rec.fields)
+                dims = p.dims()
+                p.expect_word("AS")
+                ty = p.type_name()
+                if ty == f"rec:{rec.name}":
+                    raise CompileError(line, f"a TYPE cannot contain itself")
+                p.end()
+                rec.fields[f.val.lower()] = Var(f.val.lower(), ty, dims, line)
+                continue
+            if toks[0].is_("TYPE"):
+                if len(toks) != 2 or toks[1].kind != "id":
+                    raise CompileError(line, "expected TYPE name")
+                name = toks[1].val
+                self.check_new_name(name, line, self.records)
+                rec = Record(name.lower(), line, name)
+                self.records[rec.name] = rec
+                continue
+            rest.append(toks)
+        if rec is not None:
+            raise CompileError(rec.line, f"TYPE {rec.display} without END TYPE")
+        for toks in rest:
             if toks[0].is_("SUB", "FUNCTION") and len(toks) > 1:
                 p = Parser(self, toks, 1)
                 name_tok = p.expect_id()
@@ -203,12 +267,21 @@ class Compiler:
                 if toks[0].is_("FUNCTION"):
                     p.expect_word("AS")
                     ret = p.type_name()
+                    if is_rec(ret):
+                        raise CompileError(toks[0].line, "a FUNCTION cannot return a TYPE in "
+                                                         "this version (use a SUB parameter)")
                 p.end()
                 self.procs[name_tok.val.lower()] = Proc(name_tok.val, params, ret, toks[0].line)
+        return rest
 
     def assemble(self, main, procs_code):
         lines = [f"/* Generated by Basic89 from {self.filename}: do not edit, edit the .b89 */",
                  '#include "b89rt.h"', ""]
+        for r in self.records.values():
+            lines.append("typedef struct {")
+            for f in r.fields.values():
+                lines.append(f"  {self.decl(f)};")
+            lines.append(f"}} bt_{r.display};")
         for p in self.procs.values():
             lines.append(self.proc_header(p) + ";")
         for v in self.globals.values():
@@ -236,12 +309,11 @@ class Compiler:
         return "\n".join(final)
 
     def decl(self, v):
-        if v.size is not None:
-            return f"{v.ctype} bv_{v.name}[{v.size + 1}]"
-        return f"{v.ctype} bv_{v.name}"
+        return f"{self.ctype(v.ctype)} bv_{v.name}" + "".join(f"[{d + 1}]" for d in v.dims or ())
 
     def proc_header(self, p):
-        args = ", ".join(f"{t} bv_{n}" for n, t in p.params) or "void"
+        args = ", ".join(f"{self.ctype(t)} {'*' if is_rec(t) else ''}bv_{n.lower()}"
+                         for n, t in p.params) or "void"
         return f"static {p.ret or 'void'} bs_{p.name.lower()}({args})"
 
     # ---------------------------------------------------------- statements
@@ -294,7 +366,8 @@ class Compiler:
             if self.blocks:
                 raise CompileError(line, f"{word} inside a {self.blocks[-1][0]} block")
             self.proc = self.procs[toks[1].val.lower()]
-            self.locals = {n.lower(): Var(n.lower(), t) for n, t in self.proc.params}
+            self.locals = {n.lower(): Var(n.lower(), t, byref=is_rec(t))
+                           for n, t in self.proc.params}
             self.saved_out, self.out = self.out, []
             self.proc_line = line
             self.indent = 1
@@ -359,7 +432,7 @@ class Compiler:
             self.indent += 1
         elif word == "SELECT":
             p.expect_word("CASE")
-            e, _ = p.expr()
+            e, _ = p.num_expr()
             p.end()
             n = self.new_label()
             self.emit(line, "{")
@@ -427,7 +500,7 @@ class Compiler:
                     raise CompileError(line, f"NEXT {v.val} does not match FOR {b[3]}")
             p.end()
             self.blocks.pop()
-            self.emit(line, f"bv_{b[3]} += {b[4]};" if b[4] else "")
+            self.emit(line, f"{b[6]} += {b[4]};")
             self.indent -= 1
             self.emit_raw("}")
             self.close_label(b)
@@ -487,7 +560,7 @@ class Compiler:
         elif word == "RETURN":
             if not self.proc or self.proc.ret is None:
                 raise CompileError(line, "RETURN value is only allowed in a FUNCTION")
-            e, _ = p.expr()
+            e, _ = p.num_expr()
             p.end()
             self.emit(line, f"return {e};")
         elif word == "PRINT":
@@ -558,25 +631,20 @@ class Compiler:
         while True:
             name = p.expect_id()
             self.check_new_name(name.val, line, scope)
-            size = None
-            if p.more() and p.peek().is_("("):
-                p.next()
-                size = p.const_expr()
-                p.expect_op(")")
-                if not 0 <= size <= 8000:
-                    raise CompileError(line, "array size must be between 0 and 8000")
+            dims = p.dims()
             p.expect_word("AS")
             ctype = p.type_name()
-            v = Var(name.val.lower(), ctype, size, line)
+            v = Var(name.val.lower(), ctype, dims, line)
             scope[v.name] = v
             if p.more() and p.peek().is_("="):
-                if size is not None:
-                    raise CompileError(line, "an array cannot be initialized with =")
+                if dims or is_rec(ctype):
+                    raise CompileError(line, "an array or a TYPE variable cannot be "
+                                             "initialized with =")
                 p.next()
-                e, _ = p.expr()
+                e, _ = p.num_expr()
                 self.emit(line, f"bv_{v.name} = {e};")
-            elif size is not None:       # DIM sets to 0, also when the program runs again
-                self.emit(line, f"memset(bv_{v.name}, 0, sizeof bv_{v.name});")
+            elif dims or is_rec(ctype):  # DIM sets to 0, also when the program runs again
+                self.emit(line, f"memset(&bv_{v.name}, 0, sizeof bv_{v.name});")
             else:
                 self.emit(line, f"bv_{v.name} = 0;")
             if not p.more():
@@ -585,17 +653,17 @@ class Compiler:
 
     def for_stmt(self, p, line):
         var_tok = p.expect_id()
-        v = self.lookup(var_tok.val, line)
-        if v.size is not None:
-            raise CompileError(line, "the FOR counter cannot be an array")
+        ref, ty = p.lvalue(var_tok)
+        if is_rec(ty):
+            raise CompileError(line, "the FOR counter must be a number")
         p.expect_op("=")
-        start, _ = p.expr()
+        start, _ = p.num_expr()
         p.expect_word("TO")
-        end, _ = p.expr()
+        end, _ = p.num_expr()
         step = "1"
         if p.more():
             p.expect_word("STEP")
-            step, _ = p.expr()
+            step, _ = p.num_expr()
         p.end()
         n = self.new_label()
         self.emit(line, "{")
@@ -604,16 +672,16 @@ class Compiler:
         lit = re.fullmatch(r"\(?-?\s*\d+\)?", step.replace(" ", "")) is not None
         if lit:
             st = step
-            test = f"bv_{v.name} >= b89_to{n}" if neg else f"bv_{v.name} <= b89_to{n}"
+            test = f"{ref} >= b89_to{n}" if neg else f"{ref} <= b89_to{n}"
             self.emit(line, f"long b89_to{n} = {end};")
         else:
             st = f"b89_st{n}"
             self.emit(line, f"long b89_to{n} = {end}; long b89_st{n} = {step};")
-            test = (f"(b89_st{n} >= 0 ? bv_{v.name} <= b89_to{n} : bv_{v.name} >= b89_to{n})")
-        self.emit(line, f"for (bv_{v.name} = {start}; {test}; ) {{")
+            test = f"(b89_st{n} >= 0 ? {ref} <= b89_to{n} : {ref} >= b89_to{n})"
+        self.emit(line, f"for ({ref} = {start}; {test}; ) {{")
         self.indent += 1
-        # [kind, line, exit label used, var, step, exit label number]
-        self.blocks.append(["FOR", line, False, v.name, st, n])
+        # [kind, line, exit label used, counter name, step, exit label number, counter C code]
+        self.blocks.append(["FOR", line, False, var_tok.val.lower(), st, n, ref])
 
     def print_stmt(self, p, line):
         fmt, args, newline = [], [], True
@@ -633,7 +701,7 @@ class Compiler:
                 p.next()
                 fmt.append(c_string(t.val, line).replace("%", "%%"))
             else:
-                e, ty = p.expr()
+                e, ty = p.num_expr()
                 fmt.append("%ld")
                 args.append(f"(long)({e})")
         if newline:
@@ -651,35 +719,27 @@ class Compiler:
         paren = p.more() and p.peek().is_("(")
         if paren:
             p.next()
-        args = p.expr_list(")" if paren else None)
+        args = p.expr_list(")" if paren else None, typed=True)
         if paren:
             p.expect_op(")")
         p.end()
-        if len(args) != len(proc.params):
-            raise CompileError(line, f"{proc.name} takes {len(proc.params)} argument(s), "
-                                     f"{len(args)} given")
-        self.emit(line, f"bs_{proc.name.lower()}({', '.join(args)});")
+        self.emit(line, f"bs_{proc.name.lower()}({p.call_args(proc, args)});")
 
     def assignment(self, name_tok, p, line):
         if name_tok.val.lower() in self.consts:
             raise CompileError(line, f"'{name_tok.val}' is a CONST, it cannot be changed")
-        v = self.lookup(name_tok.val, line)
-        target = f"bv_{v.name}"
-        if v.size is not None:
-            p.expect_op("(")
-            idx, _ = p.expr()
-            p.expect_op(")")
-            target += f"[{idx}]"
-        elif p.more() and p.peek().is_("("):
-            raise CompileError(line, f"'{name_tok.val}' is not an array")
+        target, ty = p.lvalue(name_tok)
         if not p.more():
             raise CompileError(line, f"'{name_tok.val}' alone is not a statement "
                                      "(expected = value, or a SUB name)")
         op = p.next()
         if not op.is_("=", "+=", "-=", "*="):
             raise CompileError(line, f"expected = after {name_tok.val}")
-        e, _ = p.expr()
+        e, ety = p.expr()
         p.end()
+        if is_rec(ty) or is_rec(ety):
+            if op.val != "=" or ty != ety:
+                raise CompileError(line, f"cannot assign {self.tname(ety)} to {self.tname(ty)}")
         self.emit(line, f"{target} {op.val} {e};")
 
 
@@ -728,8 +788,99 @@ class Parser:
     def type_name(self):
         t = self.next()
         ty = TYPES.get(t.val.upper())
-        if not ty:
-            raise CompileError(self.line, f"unknown type '{t.val}' (INTEGER, LONG or BOOLEAN)")
+        if ty:
+            return ty
+        if t.kind == "id" and t.val.lower() in self.c.records:
+            return f"rec:{t.val.lower()}"
+        raise CompileError(self.line, f"unknown type '{t.val}' (INTEGER, LONG, BOOLEAN "
+                                      "or the name of a TYPE)")
+
+    def dims(self):
+        """(10) or (20, 12) after a name in DIM or TYPE: the upper bounds, or None."""
+        if not (self.more() and self.peek().is_("(")):
+            return None
+        self.next()
+        dims = []
+        while True:
+            d = self.const_expr()
+            if not 0 <= d <= 8000:
+                raise CompileError(self.line, "array bounds must be between 0 and 8000")
+            dims.append(d)
+            if self.peek().is_(")"):
+                break
+            self.expect_op(",")
+        self.next()
+        n = 1
+        for d in dims:
+            n *= d + 1
+        if n > 16000:
+            raise CompileError(self.line, f"array too large ({n} elements)")
+        return dims
+
+    def indices(self, dims, what):
+        if not (self.more() and self.peek().is_("(")):
+            raise CompileError(self.line, f"'{what}' is an array: give an index, e.g. "
+                                          f"{what}({', '.join('ijk'[:len(dims)] if len(dims) <= 3 else ['i'] * len(dims))})")
+        self.next()
+        idx = self.expr_list(")")
+        self.expect_op(")")
+        if len(idx) != len(dims):
+            raise CompileError(self.line, f"'{what}' has {len(dims)} dimension(s), "
+                                          f"{len(idx)} index(es) given")
+        return "".join(f"[{i}]" for i in idx)
+
+    def lvalue(self, name_tok):
+        """A variable, an array element, a record field (a.b(2).c...): (C code, type)."""
+        v = self.c.lookup(name_tok.val, self.line)
+        code, ty, what = v.ref, v.ctype, name_tok.val
+        if v.dims:
+            code += self.indices(v.dims, what)
+        elif self.more() and self.peek().is_("("):
+            raise CompileError(self.line, f"'{what}' is not an array")
+        while self.more() and self.peek().is_("."):
+            self.next()
+            if not is_rec(ty):
+                raise CompileError(self.line, f"'{what}' is not a TYPE variable: it has no fields")
+            rec = self.c.records[ty[4:]]
+            f = self.expect_id()
+            fld = rec.fields.get(f.val.lower())
+            if fld is None:
+                raise CompileError(self.line, f"TYPE {rec.display} has no field '{f.val}'")
+            what = f"{what}.{f.val}"
+            code, ty = f"{code}.bv_{fld.name}", fld.ctype
+            if fld.dims:
+                code += self.indices(fld.dims, what)
+            elif self.more() and self.peek().is_("("):
+                raise CompileError(self.line, f"'{what}' is not an array")
+        return code, ty
+
+    def call_args(self, proc, args):
+        """Checks the arguments of a call; TYPE arguments are passed by address."""
+        if len(args) != len(proc.params):
+            raise CompileError(self.line, f"{proc.name} takes {len(proc.params)} argument(s), "
+                                          f"{len(args)} given")
+        out = []
+        for (pname, pty), (code, ty) in zip(proc.params, args):
+            if is_rec(pty) or is_rec(ty):
+                if pty != ty:
+                    raise CompileError(self.line, f"{proc.name}: '{pname}' must be "
+                                                  f"{self.c.tname(pty)}, not {self.c.tname(ty)}")
+                if not code.startswith(("bv_", "(*bv_")):
+                    raise CompileError(self.line, f"{proc.name}: '{pname}' must be a variable")
+                out.append(code[2:-1] if code.startswith("(*") and code.endswith(")")
+                           and code.count("(") == 1 else f"&{code}")
+            else:
+                out.append(code)
+        return ", ".join(out)
+
+    def num_expr(self):
+        e, ty = self.expr()
+        return e, self.num(ty)
+
+    def num(self, ty):
+        if is_rec(ty):
+            raise CompileError(self.line, f"a {self.c.tname(ty)} variable cannot be used here "
+                                          "(use one of its fields)")
         return ty
 
     def params(self):
@@ -755,21 +906,21 @@ class Parser:
             self.end()
         return a
 
-    def expr_list(self, closer, stop_word=None):
+    def expr_list(self, closer, stop_word=None, typed=False):
         out = []
         if not self.more() or (closer and self.peek().is_(closer)) or \
                 (stop_word and self.peek().is_(stop_word)):
             return out
         while True:
-            e, ty = self.expr()
-            out.append(e)
+            e, ty = self.expr() if typed else self.num_expr()
+            out.append((e, ty) if typed else e)
             if self.more() and self.peek().is_(","):
                 self.next()
                 continue
             return out
 
     def const_expr(self):
-        e, _ = self.expr()
+        e, _ = self.num_expr()
         try:
             return int(eval(e.replace("L", ""), {"__builtins__": {}}))
         except Exception:
@@ -802,14 +953,15 @@ class Parser:
 
     # precedence: OR < AND < NOT < comparisons < + - < * / \ MOD < unary minus
     def condition(self):
-        e, _ = self.expr()
+        e, _ = self.num_expr()
         return e
 
     def expr(self):
         a, ta = self.and_expr()
         while self.more() and self.peek().is_("OR"):
             self.next()
-            b, _ = self.and_expr()
+            b, tb = self.and_expr()
+            self.num(ta), self.num(tb)
             a, ta = f"({a} || {b})", "short"
         return a, ta
 
@@ -817,14 +969,16 @@ class Parser:
         a, ta = self.not_expr()
         while self.more() and self.peek().is_("AND"):
             self.next()
-            b, _ = self.not_expr()
+            b, tb = self.not_expr()
+            self.num(ta), self.num(tb)
             a, ta = f"({a} && {b})", "short"
         return a, ta
 
     def not_expr(self):
         if self.more() and self.peek().is_("NOT"):
             self.next()
-            a, _ = self.not_expr()
+            a, ta = self.not_expr()
+            self.num(ta)
             return f"(!{a})", "short"
         return self.compare()
 
@@ -833,7 +987,8 @@ class Parser:
         ops = {"=": "==", "<>": "!=", "<": "<", ">": ">", "<=": "<=", ">=": ">="}
         if self.more() and self.peek().kind == "op" and self.peek().val in ops:
             op = ops[self.next().val]
-            b, _ = self.add()
+            b, tb = self.add()
+            self.num(ta), self.num(tb)
             return f"({a} {op} {b})", "short"
         return a, ta
 
@@ -842,6 +997,7 @@ class Parser:
         while self.more() and self.peek().is_("+", "-"):
             op = self.next().val
             b, tb = self.mul()
+            self.num(ta), self.num(tb)
             a, ta = f"({a} {op} {b})", "long" if "long" in (ta, tb) else "short"
         return a, ta
 
@@ -850,6 +1006,7 @@ class Parser:
         while self.more() and self.peek().is_("*", "/", "\\", "MOD"):
             op = self.next().val.upper()
             b, tb = self.unary()
+            self.num(ta), self.num(tb)
             cop = {"*": "*", "/": "/", "\\": "/", "MOD": "%"}[op]
             a, ta = f"({a} {cop} {b})", "long" if "long" in (ta, tb) else "short"
         return a, ta
@@ -858,7 +1015,7 @@ class Parser:
         if self.more() and self.peek().is_("-"):
             self.next()
             a, ta = self.unary()
-            return f"(-{a})", ta
+            return f"(-{a})", self.num(ta)
         if self.more() and self.peek().is_("+"):
             self.next()
             return self.unary()
@@ -916,19 +1073,10 @@ class Parser:
             a = []
             if self.more() and self.peek().is_("("):
                 self.next()
-                a = self.expr_list(")")
+                a = self.expr_list(")", typed=True)
                 self.expect_op(")")
-            if len(a) != len(proc.params):
-                raise CompileError(self.line, f"{proc.name} takes {len(proc.params)} "
-                                              f"argument(s), {len(a)} given")
-            return f"bs_{key}({', '.join(a)})", proc.ret
-        v = self.c.lookup(t.val, self.line)
-        if v.size is not None:
-            self.expect_op("(")
-            idx, _ = self.expr()
-            self.expect_op(")")
-            return f"bv_{v.name}[{idx}]", v.ctype
-        return f"bv_{v.name}", v.ctype
+            return f"bs_{key}({self.call_args(proc, a)})", proc.ret
+        return self.lvalue(t)
 
 
 def compile_source(source, filename):
