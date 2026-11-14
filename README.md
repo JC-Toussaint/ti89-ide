@@ -31,7 +31,8 @@ emulator, debug it at source level, and send it to the real calculator over USB.
     Variables tab shows labelled data (`dc.b`/`dc.w`/`ds`, `.byte`/`.word`/`.asciz`...)
     read from memory, and the `equ` constants.
 - **Send to the real TI-89 Titanium** over the direct USB cable (libticalcs, usbipd on WSL).
-- Examples in `projets/exemples/`: graphics, grayscale, and a small sprite game.
+- Examples in `projets/exemples/`: graphics, grayscale, a rotating 3D cube and a small
+  sprite game.
 
 ![Assembly debugging](docs/debugger-asm.png)
 
@@ -151,6 +152,10 @@ The IDE then attaches the calculator to WSL by itself (`usbipd attach`) when you
 
 `projets/exemples/meteor.c`: dodge the falling meteors. Shows sprites, double buffering,
 direct keyboard reading and a steady frame rate driven by the 256 Hz interrupt.
+
+`projets/exemples/cube.c`: a rotating 3D cube, wireframe or with hidden faces removed
+(F1), with a timer and a frames-per-second counter. Shows fixed-point arithmetic, a 3D
+rotation matrix, perspective projection and back-face culling.
 
 ## Credits
 
