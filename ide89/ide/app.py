@@ -628,10 +628,14 @@ class IdeApp:
         self.output.configure(state="disabled")
         order = {"error": 0, "warning": 1, "note": 2}
         msgs = sorted(res.messages, key=lambda m: (order.get(m.severity, 3), m.line))
+        here = os.path.basename(self.path or "")
         for m in msgs:
-            self.problems.insert("", "end", values=(m.severity, m.line or "", m.text),
+            # A message about another file (a Basic89 INCLUDE): "file:line", not marked here
+            other = m.file and m.line and os.path.basename(m.file) != here
+            where = f"{m.file}:{m.line}" if other else (m.line or "")
+            self.problems.insert("", "end", values=(m.severity, where, m.text),
                                  tags=(m.severity,))
-            if m.line and m.severity in ("error", "warning"):
+            if m.line and not other and m.severity in ("error", "warning"):
                 self.editor.mark_line(m.line, "error_line" if m.severity == "error" else "warning_line")
         n_err = sum(m.severity == "error" for m in msgs)
         n_warn = sum(m.severity == "warning" for m in msgs)
@@ -642,7 +646,8 @@ class IdeApp:
                              UI["ok"])
         else:
             self._set_status(f"✘ Build failed: {n_err} error(s), {n_warn} warning(s)", UI["err"])
-            first = next((m for m in msgs if m.severity == "error" and m.line), None)
+            first = next((m for m in msgs if m.severity == "error" and m.line and
+                          (not m.file or os.path.basename(m.file) == here)), None)
             if first:
                 self.editor.goto_line(first.line)
         if msgs:
@@ -656,8 +661,15 @@ class IdeApp:
         sel = self.problems.selection()
         if not sel:
             return
-        line = self.problems.item(sel[0], "values")[1]
-        if line:
+        line = str(self.problems.item(sel[0], "values")[1])
+        if ":" in line and self.path:
+            # in an INCLUDEd file: open it (next to the program) at that line
+            fname, _, num = line.rpartition(":")
+            p = os.path.join(os.path.dirname(self.path), fname)
+            if os.path.exists(p) and self._confirm_discard():
+                self.open_file(p)
+                self.editor.goto_line(int(num))
+        elif line:
             self.editor.goto_line(int(line))
 
     def _set_status(self, text, color=None):

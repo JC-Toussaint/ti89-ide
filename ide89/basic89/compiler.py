@@ -17,8 +17,20 @@ RUNTIME_DIR = os.path.dirname(os.path.abspath(__file__))     # b89rt.h
 class CompileError(Exception):
     def __init__(self, line, msg):
         super().__init__(msg)
-        self.line = line
+        self.line = int(line)
+        self.file = getattr(line, "file", None)     # set for the lines of an INCLUDEd file
         self.msg = msg
+
+
+class Loc(int):
+    """A line number that also knows its file (main program or INCLUDEd file): it goes
+    through the compiler like the line number it is, and the #line directives and the
+    error messages name the right file."""
+
+    def __new__(cls, n, file):
+        o = int.__new__(cls, n)
+        o.file = file
+        return o
 
 
 # ------------------------------------------------------------------ lexer
@@ -69,7 +81,7 @@ def tokenize_line(text, line):
 KEYWORDS = set("""
 AND AS BOX CALL CASE CIRCLE CLS CONST DELAY DIM DO ELSE ELSEIF END EXIT FILL FLIP FOR
 FUNCTION IF LINE LOCATE LOOP MOD NEXT NOT OR PRINT PSET RETURN SCREEN STEP SUB THEN TO
-UNTIL WAITFRAME WAITKEY WEND WHILE BUFFERED DIRECT SELECT IS TYPE INPUT
+UNTIL WAITFRAME WAITKEY WEND WHILE BUFFERED DIRECT SELECT IS TYPE INPUT INCLUDE
 """.split())
 
 TYPES = {"INTEGER": "short", "LONG": "long", "BOOLEAN": "short", "FIXED": "fixed",
@@ -174,6 +186,7 @@ def c_string(s, line):
 class Compiler:
     def __init__(self, source, filename):
         self.filename = os.path.basename(filename)
+        self.base_dir = os.path.dirname(os.path.abspath(filename))
         self.lines = source.split("\n")
         self.globals = {}
         self.consts = {}
@@ -193,7 +206,7 @@ class Compiler:
 
     # ---------------------------------------------------------- output
     def emit(self, line, text):
-        self.out.append(f'#line {line} "{self.filename}"')
+        self.out.append(f'#line {int(line)} "{getattr(line, "file", self.filename)}"')
         self.out.append("  " * self.indent + text)
 
     def emit_raw(self, text):
@@ -238,12 +251,41 @@ class Compiler:
             raise CompileError(line, f"'{name}' is already declared")
 
     # ---------------------------------------------------------- driver
+    def read_lines(self, rel, lines, toklines, seen):
+        """Tokenizes a file; INCLUDE "other.b89" inserts that file's lines in its place
+        (only once per file: a library included twice is read once)."""
+        for i, text in enumerate(lines, 1):
+            loc = Loc(i, rel)
+            t = tokenize_line(text, loc)
+            if not t:
+                continue
+            if t[0].is_("INCLUDE"):
+                if len(t) != 2 or t[1].kind != "str":
+                    raise CompileError(loc, 'expected INCLUDE "file.b89"')
+                target = os.path.normpath(os.path.join(os.path.dirname(rel), t[1].val))
+                if target.replace("\\", "/").startswith("../") or os.path.isabs(t[1].val):
+                    target = t[1].val
+                full = os.path.join(self.base_dir, target)
+                key = os.path.normcase(os.path.abspath(full))
+                if key in seen:
+                    continue
+                seen.add(key)
+                try:
+                    with open(full, encoding="utf-8") as f:
+                        sub = f.read().split("\n")
+                except FileNotFoundError:
+                    raise CompileError(loc, f"file not found: {t[1].val} (the path is relative "
+                                            "to the file that includes it)")
+                except (OSError, UnicodeDecodeError) as e:
+                    raise CompileError(loc, f"cannot read {t[1].val} ({e.__class__.__name__})")
+                self.read_lines(target.replace("\\", "/"), sub, toklines, seen)
+                continue
+            toklines.append(t)
+
     def compile(self):
         toklines = []
-        for i, text in enumerate(self.lines, 1):
-            t = tokenize_line(text, i)
-            if t:
-                toklines.append(t)
+        main_key = os.path.normcase(os.path.join(self.base_dir, self.filename))
+        self.read_lines(self.filename, self.lines, toklines, {main_key})
         toklines = self.prescan(toklines)
         main = []
         self.out = main
@@ -435,7 +477,8 @@ class Compiler:
                 b = self.blocks[-1]
                 raise CompileError(b[1], f"{b[0]} without its end ({self.block_end(b[0])})")
             body = self.out
-            code = [f'#line {self.proc_line} "{self.filename}"', self.proc_header(self.proc), "{"]
+            pf = getattr(self.proc_line, "file", self.filename)
+            code = [f'#line {int(self.proc_line)} "{pf}"', self.proc_header(self.proc), "{"]
             for v in self.locals.values():
                 if v.name not in {n.lower() for n, _ in self.proc.params}:
                     code.append(f"  {self.decl(v)};")

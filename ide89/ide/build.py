@@ -110,8 +110,9 @@ def build(source_path, optimize="-O2", debug_build=False):
             with open(source_path, encoding="utf-8") as f:
                 code = compile_source(f.read(), source_path)
         except CompileError as e:
-            return BuildResult(False, [Message("error", e.line, e.msg, source_file)],
-                               f"{source_file}:{e.line}: error: {e.msg}")
+            f = e.file or source_file
+            return BuildResult(False, [Message("error", e.line, e.msg, f)],
+                               f"{f}:{e.line}: error: {e.msg}")
         except (OSError, UnicodeDecodeError) as e:
             return BuildResult(False, [Message("error", 0, str(e))])
         source_file += ".c"
