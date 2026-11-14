@@ -25,7 +25,7 @@ class CompileError(Exception):
 _TOKEN_RE = re.compile(r"""
     (?P<ws>[ \t]+)
   | (?P<comment>'.*)
-  | (?P<num>&[Hh][0-9A-Fa-f]+|&[Bb][01]+|\d+)
+  | (?P<num>&[Hh][0-9A-Fa-f]+|&[Bb][01]+|\d+\.\d*|\.\d+|\d+)
   | (?P<str>"[^"\n]*"?)
   | (?P<id>[A-Za-z_][A-Za-z0-9_]*)
   | (?P<op>\+=|-=|\*=|<>|<=|>=|[-+*/\\=<>(),;:.])
@@ -72,7 +72,7 @@ FUNCTION IF LINE LOCATE LOOP MOD NEXT NOT OR PRINT PSET RETURN SCREEN STEP SUB T
 UNTIL WAITFRAME WAITKEY WEND WHILE BUFFERED DIRECT SELECT IS TYPE
 """.split())
 
-TYPES = {"INTEGER": "short", "LONG": "long", "BOOLEAN": "short"}
+TYPES = {"INTEGER": "short", "LONG": "long", "BOOLEAN": "short", "FIXED": "fixed"}
 
 KEYS = {"LEFT": "RR_LEFT", "RIGHT": "RR_RIGHT", "UP": "RR_UP", "DOWN": "RR_DOWN",
         "ENTER": "RR_ENTER", "ESC": "RR_ESC", "F1": "RR_F1", "F2": "RR_F2", "F3": "RR_F3",
@@ -91,16 +91,37 @@ BUILTINS = {
     "ICOS": (1, "b89_icos({0})", "short"),
     "GETKEY": (0, "b89_getkey()", "short"),
     "TICKS": (0, "((long)b89_ticks)", "long"),
+    "PI": (0, "205887L", "fixed"),
 }
 
 
-# Types: "short" (INTEGER, BOOLEAN), "long" (LONG), "rec:<name>" (a TYPE ... END TYPE)
+# Types: "short" (INTEGER, BOOLEAN), "long" (LONG), "fixed" (FIXED: 16.16 fixed point,
+# a long holding value * 65536), "rec:<name>" (a TYPE ... END TYPE)
 def is_rec(ty):
     return ty.startswith("rec:")
 
 
+def conv(code, frm, to):
+    """C code converting a number from type frm to type to."""
+    if frm == to or is_rec(frm) or is_rec(to):
+        return code
+    if to == "fixed":
+        return f"((long)({code}) << 16)"
+    if frm == "fixed":
+        return f"(({code}) >> 16)"          # rounded down
+    return code
+
+
+def fixed_literal(text, line):
+    raw = round(float(text) * 65536)
+    if raw >= 1 << 31:
+        raise CompileError(line, f"{text} is too large for a FIXED (at most 32767.99998)")
+    return f"{raw}L"
+
+
 def basic_type(ty):
-    return ty[4:] if is_rec(ty) else {"short": "INTEGER", "long": "LONG"}.get(ty, ty)
+    return ty[4:] if is_rec(ty) else {"short": "INTEGER", "long": "LONG",
+                                      "fixed": "FIXED"}.get(ty, ty)
 
 
 class Var:
@@ -175,6 +196,8 @@ class Compiler:
     # ---------------------------------------------------------- names
     def ctype(self, ty):
         """C type; a TYPE keeps the case of its name (bt_Enemy), shown so by the debugger."""
+        if ty == "fixed":
+            return "b89fixed"
         return f"bt_{self.records[ty[4:]].display}" if is_rec(ty) else ty
 
     def tname(self, ty):
@@ -192,7 +215,8 @@ class Compiler:
     def check_new_name(self, name, line, where):
         up = name.upper()
         if up in KEYWORDS or up in TYPES or up in BUILTINS or up in COLORS or \
-                up in ("TRUE", "FALSE", "KEYDOWN") or up.startswith("KEY_"):
+                up in ("TRUE", "FALSE", "KEYDOWN", "INT", "ROUND", "SQR", "SIN", "COS") or \
+                up.startswith("KEY_"):
             raise CompileError(line, f"'{name}' is a reserved word")
         key = name.lower()
         if key in where or key in self.consts or (key in self.procs and where is not None):
@@ -314,7 +338,7 @@ class Compiler:
     def proc_header(self, p):
         args = ", ".join(f"{self.ctype(t)} {'*' if is_rec(t) else ''}bv_{n.lower()}"
                          for n, t in p.params) or "void"
-        return f"static {p.ret or 'void'} bs_{p.name.lower()}({args})"
+        return f"static {self.ctype(p.ret) if p.ret else 'void'} bs_{p.name.lower()}({args})"
 
     # ---------------------------------------------------------- statements
     def statement_line(self, toks, procs_code):
@@ -402,7 +426,7 @@ class Compiler:
             name = p.expect_id()
             self.check_new_name(name.val, line, self.consts)
             p.expect_op("=")
-            self.consts[name.val.lower()] = p.const_expr()
+            self.consts[name.val.lower()] = p.const_value()
             p.end()
         elif word == "IF":
             cond = p.condition()
@@ -432,14 +456,14 @@ class Compiler:
             self.indent += 1
         elif word == "SELECT":
             p.expect_word("CASE")
-            e, _ = p.num_expr()
+            e, sty = p.num_expr()
             p.end()
             n = self.new_label()
             self.emit(line, "{")
             self.indent += 1
             self.emit(line, f"long b89_s{n} __attribute__((unused)) = {e};")
             # [kind, line, CASE ELSE seen, temp number, number of CASEs]
-            self.blocks.append(["SELECT", line, False, n, 0])
+            self.blocks.append(["SELECT", line, False, n, 0, sty])
         elif word == "CASE":
             b = self.need_block("SELECT", line, "CASE")
             if b[2]:
@@ -457,7 +481,7 @@ class Compiler:
                     self.indent += 1
                 b[4] += 1
                 return
-            cond = p.case_tests(f"b89_s{b[3]}")
+            cond = p.case_tests(f"b89_s{b[3]}", b[5])
             if b[4] == 0:
                 self.emit(line, f"if ({cond}) {{")
                 self.indent += 1
@@ -560,9 +584,9 @@ class Compiler:
         elif word == "RETURN":
             if not self.proc or self.proc.ret is None:
                 raise CompileError(line, "RETURN value is only allowed in a FUNCTION")
-            e, _ = p.num_expr()
+            e, ety = p.num_expr()
             p.end()
-            self.emit(line, f"return {e};")
+            self.emit(line, f"return {conv(e, ety, self.proc.ret)};")
         elif word == "PRINT":
             self.print_stmt(p, line)
         elif word == "CLS":
@@ -641,8 +665,8 @@ class Compiler:
                     raise CompileError(line, "an array or a TYPE variable cannot be "
                                              "initialized with =")
                 p.next()
-                e, _ = p.num_expr()
-                self.emit(line, f"bv_{v.name} = {e};")
+                e, ety = p.num_expr()
+                self.emit(line, f"bv_{v.name} = {conv(e, ety, ctype)};")
             elif dims or is_rec(ctype):  # DIM sets to 0, also when the program runs again
                 self.emit(line, f"memset(&bv_{v.name}, 0, sizeof bv_{v.name});")
             else:
@@ -657,13 +681,16 @@ class Compiler:
         if is_rec(ty):
             raise CompileError(line, "the FOR counter must be a number")
         p.expect_op("=")
-        start, _ = p.num_expr()
+        start, t1 = p.num_expr()
+        start = conv(start, t1, ty)
         p.expect_word("TO")
-        end, _ = p.num_expr()
-        step = "1"
+        end, t2 = p.num_expr()
+        end = conv(end, t2, ty)
+        step = conv("1", "short", ty)
         if p.more():
             p.expect_word("STEP")
-            step, _ = p.num_expr()
+            step, t3 = p.num_expr()
+            step = conv(step, t3, ty)
         p.end()
         n = self.new_label()
         self.emit(line, "{")
@@ -702,8 +729,12 @@ class Compiler:
                 fmt.append(c_string(t.val, line).replace("%", "%%"))
             else:
                 e, ty = p.num_expr()
-                fmt.append("%ld")
-                args.append(f"(long)({e})")
+                if ty == "fixed":
+                    fmt.append("%s")
+                    args.append(f"b89_fstr({e})")
+                else:
+                    fmt.append("%ld")
+                    args.append(f"(long)({e})")
         if newline:
             fmt.append("\\n")
         a = "".join(", " + x for x in args)
@@ -740,7 +771,15 @@ class Compiler:
         if is_rec(ty) or is_rec(ety):
             if op.val != "=" or ty != ety:
                 raise CompileError(line, f"cannot assign {self.tname(ety)} to {self.tname(ty)}")
-        self.emit(line, f"{target} {op.val} {e};")
+            self.emit(line, f"{target} = {e};")
+        elif op.val == "=":
+            self.emit(line, f"{target} = {conv(e, ety, ty)};")
+        elif "fixed" in (ty, ety):
+            # x += 0.5, f *= 2... : computed with the FIXED rules, then stored
+            r, rty = p.arith(target, ty, op.val[0], e, ety)
+            self.emit(line, f"{target} = {conv(r, rty, ty)};")
+        else:
+            self.emit(line, f"{target} {op.val} {e};")
 
 
 class Parser:
@@ -870,7 +909,7 @@ class Parser:
                 out.append(code[2:-1] if code.startswith("(*") and code.endswith(")")
                            and code.count("(") == 1 else f"&{code}")
             else:
-                out.append(code)
+                out.append(conv(code, ty, pty))
         return ", ".join(out)
 
     def num_expr(self):
@@ -913,20 +952,28 @@ class Parser:
             return out
         while True:
             e, ty = self.expr() if typed else self.num_expr()
-            out.append((e, ty) if typed else e)
+            out.append((e, ty) if typed else conv(e, ty, "long"))
             if self.more() and self.peek().is_(","):
                 self.next()
                 continue
             return out
 
     def const_expr(self):
-        e, _ = self.num_expr()
+        """A constant integer (array bounds)."""
+        v, ty = self.const_value()
+        if ty == "fixed":
+            raise CompileError(self.line, "an integer constant is expected here")
+        return v
+
+    def const_value(self):
+        """(value, type) of a constant expression; a FIXED value is stored * 65536."""
+        e, ty = self.num_expr()
         try:
-            return int(eval(e.replace("L", ""), {"__builtins__": {}}))
+            return int(eval(e.replace("L", "").replace("/", "//"), {"__builtins__": {}})), ty
         except Exception:
             raise CompileError(self.line, "a constant value is expected here")
 
-    def case_tests(self, var):
+    def case_tests(self, var, vty="long"):
         """CASE 1, 3 TO 5, IS > 10  ->  C condition on the SELECT value."""
         tests = []
         while True:
@@ -936,16 +983,17 @@ class Parser:
                 op = self.next()
                 if op.val not in ops:
                     raise CompileError(self.line, f"expected a comparison after IS instead of '{op.val}'")
-                e, _ = self.add()
-                tests.append(f"{var} {ops[op.val]} {e}")
+                e, ety = self.add()
+                tests.append(self.arith(var, vty, op.val, e, ety)[0])
             else:
-                a, _ = self.add()
+                a, aty = self.add()
                 if self.more() and self.peek().is_("TO"):
                     self.next()
-                    b, _ = self.add()
-                    tests.append(f"({var} >= {a} && {var} <= {b})")
+                    b, bty = self.add()
+                    tests.append(f"({self.arith(var, vty, '>=', a, aty)[0]} && "
+                                 f"{self.arith(var, vty, '<=', b, bty)[0]})")
                 else:
-                    tests.append(f"{var} == {a}")
+                    tests.append(self.arith(var, vty, "=", a, aty)[0])
             if not self.more():
                 break
             self.expect_op(",")
@@ -986,19 +1034,45 @@ class Parser:
         a, ta = self.add()
         ops = {"=": "==", "<>": "!=", "<": "<", ">": ">", "<=": "<=", ">=": ">="}
         if self.more() and self.peek().kind == "op" and self.peek().val in ops:
-            op = ops[self.next().val]
+            op = self.next().val
             b, tb = self.add()
-            self.num(ta), self.num(tb)
-            return f"({a} {op} {b})", "short"
+            return self.arith(a, ta, op, b, tb)
         return a, ta
+
+    def arith(self, a, ta, op, b, tb):
+        """a op b with the type rules: INTEGER < LONG < FIXED (FIXED if one side is)."""
+        self.num(ta), self.num(tb)
+        cmp = {"=": "==", "<>": "!=", "<": "<", ">": ">", "<=": "<=", ">=": ">="}
+        if "fixed" in (ta, tb):
+            fa, fb = conv(a, ta, "fixed"), conv(b, tb, "fixed")
+            if op in cmp:
+                return f"({fa} {cmp[op]} {fb})", "short"
+            if op in "+-":
+                return f"({fa} {op} {fb})", "fixed"
+            if op == "*":
+                if ta != "fixed":                 # integer * FIXED: no shift needed
+                    return f"({fb} * (long)({a}))", "fixed"
+                if tb != "fixed":
+                    return f"({fa} * (long)({b}))", "fixed"
+                return f"b89_fmul({fa}, {fb})", "fixed"
+            if op == "/":
+                if tb != "fixed":                 # FIXED / integer
+                    return f"({fa} / (long)({b}))", "fixed"
+                return f"b89_fdiv({fa}, {fb})", "fixed"
+            if op == "\\":
+                return f"(b89_fdiv({fa}, {fb}) >> 16)", "long"
+            raise CompileError(self.line, "MOD works on integers only (use INT() first)")
+        if op in cmp:
+            return f"({a} {cmp[op]} {b})", "short"
+        cop = {"\\": "/", "MOD": "%"}.get(op, op)
+        return f"({a} {cop} {b})", "long" if "long" in (ta, tb) else "short"
 
     def add(self):
         a, ta = self.mul()
         while self.more() and self.peek().is_("+", "-"):
             op = self.next().val
             b, tb = self.mul()
-            self.num(ta), self.num(tb)
-            a, ta = f"({a} {op} {b})", "long" if "long" in (ta, tb) else "short"
+            a, ta = self.arith(a, ta, op, b, tb)
         return a, ta
 
     def mul(self):
@@ -1006,9 +1080,7 @@ class Parser:
         while self.more() and self.peek().is_("*", "/", "\\", "MOD"):
             op = self.next().val.upper()
             b, tb = self.unary()
-            self.num(ta), self.num(tb)
-            cop = {"*": "*", "/": "/", "\\": "/", "MOD": "%"}[op]
-            a, ta = f"({a} {cop} {b})", "long" if "long" in (ta, tb) else "short"
+            a, ta = self.arith(a, ta, op, b, tb)
         return a, ta
 
     def unary(self):
@@ -1021,8 +1093,34 @@ class Parser:
             return self.unary()
         return self.primary()
 
+    def typed_builtin(self, up):
+        """Functions whose result follows the type of their arguments (FIXED or integer)."""
+        self.expect_op("(")
+        args = self.expr_list(")", typed=True)
+        self.expect_op(")")
+        n = 2 if up in ("MIN", "MAX") else 1
+        if len(args) != n:
+            raise CompileError(self.line, f"{up} takes {n} argument(s), {len(args)} given")
+        for _, ty in args:
+            self.num(ty)
+        (a, ta) = args[0]
+        if up == "ABS":
+            return f"b89_abs({a})", "fixed" if ta == "fixed" else "long"
+        if up in ("MIN", "MAX"):
+            (b, tb) = args[1]
+            ty = "fixed" if "fixed" in (ta, tb) else "long"
+            return f"b89_{up.lower()}({conv(a, ta, ty)}, {conv(b, tb, ty)})", ty
+        if up == "INT":                         # rounded down
+            return (f"(({a}) >> 16)", "long") if ta == "fixed" else (a, ta)
+        if up == "ROUND":                       # to the nearest integer
+            return (f"((({a}) + 32768L) >> 16)", "long") if ta == "fixed" else (a, ta)
+        fn = {"SQR": "b89_fsqrt", "SIN": "b89_fsin", "COS": "b89_fcos"}[up]
+        return f"{fn}({conv(a, ta, 'fixed')})", "fixed"
+
     def primary(self):
         t = self.next()
+        if t.kind == "num" and "." in t.val:
+            return fixed_literal(t.val, self.line), "fixed"
         if t.kind == "num":
             v = t.val
             n = int(v[2:], 16) if v[:2].upper() == "&H" else \
@@ -1052,6 +1150,8 @@ class Parser:
                                               "KEY_ENTER, KEY_ESC, KEY_F1...)")
             self.expect_op(")")
             return f"(_keytest({key}) != 0)", "short"
+        if up in ("ABS", "MIN", "MAX", "INT", "ROUND", "SQR", "SIN", "COS"):
+            return self.typed_builtin(up)
         if up in BUILTINS:
             n, tmpl, ty = BUILTINS[up]
             a = []
@@ -1064,7 +1164,9 @@ class Parser:
             return tmpl.format(*a), ty
         key = t.val.lower()
         if key in self.c.consts:
-            v = self.c.consts[key]
+            v, cty = self.c.consts[key]
+            if cty == "fixed":
+                return f"({v}L)", "fixed"
             return (f"{v}L", "long") if abs(v) > 32767 else (f"({v})" if v < 0 else str(v), "short")
         if key in self.c.procs and not (self.c.proc and key in self.c.locals):
             proc = self.c.procs[key]

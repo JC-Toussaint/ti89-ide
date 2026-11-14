@@ -181,6 +181,8 @@ class VariableReader:
             name = n.value.decode("latin-1")
             if name.startswith("bt_"):           # TYPE of a Basic89 program
                 return name[3:]
+            if name == "b89fixed":
+                return "FIXED"
             prefix = {"DW_TAG_structure_type": "struct ", "DW_TAG_union_type": "union ",
                       "DW_TAG_enumeration_type": "enum "}.get(tag, "")
             return prefix + name
@@ -232,6 +234,14 @@ class VariableReader:
         else:
             data = None
             where = None
+        if t is not None and t.tag == "DW_TAG_typedef" and \
+                t.attributes.get("DW_AT_name") and t.attributes["DW_AT_name"].value == b"b89fixed":
+            # FIXED of a Basic89 program: a long holding value * 65536
+            b = data if data is not None else self.read(addr, 4)
+            if b is None:
+                return VarNode(name, tn, f"‹address ${addr:06X} is not readable›", path, error=True)
+            v = int.from_bytes(b, "big", signed=True) / 65536
+            return VarNode(name, tn, f"{v:.5f}".rstrip("0").rstrip("."), path)
         try:
             return self._value(name, st, tn, addr, data, path, where)
         except Exception as e:                      # mémoire illisible, type exotique...

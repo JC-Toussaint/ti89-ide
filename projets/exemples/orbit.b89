@@ -1,0 +1,30 @@
+' Orbits - Basic89 example of FIXED numbers (decimals computed with integers)
+' A planet turns around the sun, a moon around the planet.
+' UP / DOWN: faster / slower    ESC: quit
+
+DIM angle AS FIXED, speed AS FIXED = 0.03
+DIM px AS FIXED, py AS FIXED, mx AS FIXED, my AS FIXED
+
+SCREEN BUFFERED
+DO
+  IF KEYDOWN(KEY_UP) THEN speed = MIN(speed + 0.002, 0.2)
+  IF KEYDOWN(KEY_DOWN) THEN speed = MAX(speed - 0.002, 0)
+  angle += speed
+  IF angle > 2 * PI THEN angle -= 2 * PI
+
+  px = 80 + 38 * COS(angle)               ' planet: radius 38
+  py = 52 + 30 * SIN(angle)               ' (an ellipse: the screen is wide)
+  mx = px + 10 * COS(angle * 5)           ' moon: 5 turns per year
+  my = py + 10 * SIN(angle * 5)
+
+  CLS
+  CIRCLE 80, 52, 6
+  CIRCLE 80, 52, 3
+  CIRCLE px, py, 3
+  PSET mx, my
+  PSET mx + 1, my
+  LOCATE 1, 1
+  PRINT "speed "; speed
+  FLIP
+  WAITFRAME 32
+LOOP UNTIL KEYDOWN(KEY_ESC)

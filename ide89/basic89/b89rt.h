@@ -164,4 +164,94 @@ B89_FN long b89_min(long a, long b) { return a < b ? a : b; }
 B89_FN long b89_max(long a, long b) { return a > b ? a : b; }
 B89_FN short b89_rnd(short n) { return n > 0 ? random(n) : 0; }
 
+/* ------------------------------------------------------------ FIXED (16.16 fixed point)
+   A FIXED is a long holding value * 65536: range -32768 .. 32767.99998, step 1/65536.
+   The 68000 multiplies 16 x 16 bits in one instruction: the products are built from
+   16-bit halves, without 64-bit arithmetic. */
+typedef long b89fixed;
+
+B89_FN b89fixed b89_fmul(b89fixed a, b89fixed b)
+{
+  short neg = 0;
+  unsigned long ua, ub, r;
+  unsigned short ah, al, bh, bl;
+  if (a < 0) { ua = -a; neg = 1; } else ua = a;
+  if (b < 0) { ub = -b; neg ^= 1; } else ub = b;
+  ah = ua >> 16; al = ua; bh = ub >> 16; bl = ub;
+  r = (((unsigned long)ah * bh) << 16) + (unsigned long)ah * bl + (unsigned long)al * bh
+      + (((unsigned long)al * bl) >> 16);
+  return neg ? -(long)r : (long)r;
+}
+
+B89_FN b89fixed b89_fdiv(b89fixed a, b89fixed b)
+{
+  short neg = 0, i;
+  unsigned long ua, ub, q, r;
+  if (a < 0) { ua = -a; neg = 1; } else ua = a;
+  if (b < 0) { ub = -b; neg ^= 1; } else ub = b;
+  if (ub == 0)                                /* division by 0: largest value */
+    return neg ? -0x7FFFFFFFL : 0x7FFFFFFFL;
+  q = ua / ub;
+  r = ua % ub;
+  for (i = 0; i < 16; i++) {                  /* 16 more bits of quotient */
+    r <<= 1;
+    q <<= 1;
+    if (r >= ub) { r -= ub; q |= 1; }
+  }
+  return neg ? -(long)q : (long)q;
+}
+
+B89_FN b89fixed b89_fsqrt(b89fixed a)
+{
+  unsigned long x = a, root = 0, rem = 0, test;
+  short i;
+  if (a <= 0)
+    return 0;
+  for (i = 0; i < 24; i++) {                  /* 2 bits of x per step: 16.16 -> 16.16 */
+    rem = (rem << 2) | (x >> 30);
+    x <<= 2;
+    root <<= 1;
+    test = (root << 1) + 1;
+    if (rem >= test) { rem -= test; root++; }
+  }
+  return root;
+}
+
+/* SIN / COS of an angle in radians (FIXED): table of 256 steps per turn, with a linear
+   interpolation between two steps (error below 0.0002) */
+B89_FN b89fixed b89_fsin_steps(b89fixed t)       /* t: angle in steps (16.16) */
+{
+  short i = (short)(t >> 16);
+  long f = t & 0xFFFF;
+  long s0 = b89_isin(i), s1 = b89_isin(i + 1);   /* 1/16384 */
+  return (s0 << 2) + (((s1 - s0) * f) >> 14);
+}
+
+B89_FN b89fixed b89_fsin(b89fixed a)
+{
+  return b89_fsin_steps(b89_fmul(a, 2670177L));  /* 256 / (2 pi) = 40.7437 */
+}
+
+B89_FN b89fixed b89_fcos(b89fixed a)
+{
+  return b89_fsin_steps(b89_fmul(a, 2670177L) + (64L << 16));
+}
+
+/* text of a FIXED for PRINT: up to 4 decimals, without useless zeros */
+B89_FN const char *b89_fstr(b89fixed v)
+{
+  static char bufs[4][16];
+  static short k;
+  char *b = bufs[k = (k + 1) & 3], *e;
+  unsigned long u = v < 0 ? -v : v;
+  unsigned long ip = u >> 16;
+  unsigned long fr = ((u & 0xFFFF) * 10000 + 32768) >> 16;
+  if (fr >= 10000) { ip++; fr -= 10000; }
+  sprintf(b, "%s%lu.%04lu", v < 0 && (ip || fr) ? "-" : "", ip, fr);
+  e = b + strlen(b) - 1;
+  while (*e == '0') *e-- = 0;
+  if (*e == '.') *e = 0;
+  return b;
+}
+
 #endif
