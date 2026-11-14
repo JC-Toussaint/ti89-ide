@@ -82,7 +82,7 @@ KEYWORDS = set("""
 AND AS BOX CALL CASE CIRCLE CLS CONST DELAY DIM DO ELSE ELSEIF END EXIT FILL FLIP FOR
 FUNCTION IF LINE LOCATE LOOP MOD NEXT NOT OR PRINT PSET RETURN SCREEN STEP SUB THEN TO
 UNTIL WAITFRAME WAITKEY WEND WHILE BUFFERED DIRECT SELECT IS TYPE INPUT INCLUDE COLOR GRAY4
-IMAGE SPRITE TILESET MAP MAPROW SOUND PLAY BEEP
+IMAGE SPRITE TILESET MAP MAPROW SOUND PLAY BEEP SAVE LOAD KILL
 """.split())
 
 TYPES = {"INTEGER": "short", "LONG": "long", "BOOLEAN": "short", "FIXED": "fixed",
@@ -287,7 +287,7 @@ class Compiler:
                                      "(LEFT$...); declare text with DIM name AS STRING")
         if up in KEYWORDS or up in TYPES or up in BUILTINS or up in COLORS or up in STR_FUNCS or \
                 up in ("TRUE", "FALSE", "KEYDOWN", "INT", "ROUND", "SQR", "SIN", "COS",
-                       "WIDTH", "HEIGHT", "COLLIDE") or \
+                       "WIDTH", "HEIGHT", "COLLIDE", "EXISTS") or \
                 up.startswith("KEY_"):
             raise CompileError(line, f"'{name}' is a reserved word")
         key = name.lower()
@@ -879,6 +879,29 @@ class Compiler:
                 p.end()
                 p.same_kind("str", ty, "MAPROW")
                 self.emit(line, f"b89_maprow({grid}, {rows}, {cols}, {r}, {e});")
+        elif word in ("SAVE", "LOAD", "KILL"):
+            name = p.save_name(word)
+            if word == "KILL":
+                p.end()
+                self.emit(line, f"b89_kill({name});")
+                return
+            refs = []
+            while p.more():
+                p.expect_op(",")
+                v = p.expect_id()
+                ref, ty = p.lvalue(v, whole=True)
+                lv = self.locals.get(v.val.lower()) if self.proc else None
+                if lv is not None and lv.readonly:
+                    raise CompileError(line, f"{word}: '{v.val}' is a STRING parameter (copy it "
+                                             "to a local STRING variable)")
+                refs.append(ref)
+            if not refs:
+                raise CompileError(line, f'expected {word} "name", variable, variable...')
+            ptrs = ", ".join(f"&({r})" for r in refs)
+            sizes = ", ".join(f"sizeof({r})" for r in refs)
+            const = "const " if word == "SAVE" else ""
+            self.emit(line, f"{{ {const}void *b89_p[] = {{{ptrs}}}; short b89_z[] = {{{sizes}}}; "
+                            f"b89_{word.lower()}({name}, b89_p, b89_z, {len(refs)}); }}")
         elif word == "SOUND":
             f, ms = p.args(2)
             self.emit(line, f"b89_tone({f}, {ms});")
@@ -1177,10 +1200,13 @@ class Parser:
                                           f"{len(idx)} index(es) given")
         return "".join(f"[{i}]" for i in idx)
 
-    def lvalue(self, name_tok):
-        """A variable, an array element, a record field (a.b(2).c...): (C code, type)."""
+    def lvalue(self, name_tok, whole=False):
+        """A variable, an array element, a record field (a.b(2).c...): (C code, type).
+        whole: a whole array may be given without index (SAVE, LOAD)."""
         v = self.c.lookup(name_tok.val, self.line)
         code, ty, what = v.ref, v.ctype, name_tok.val
+        if v.dims and whole and not (self.more() and self.peek().is_("(")):
+            return code, ty
         if v.dims:
             code += self.indices(v.dims, what)
         elif self.more() and self.peek().is_("("):
@@ -1196,6 +1222,8 @@ class Parser:
                 raise CompileError(self.line, f"TYPE {rec.display} has no field '{f.val}'")
             what = f"{what}.{f.val}"
             code, ty = f"{code}.bv_{fld.name}", fld.ctype
+            if fld.dims and whole and not (self.more() and self.peek().is_("(")):
+                return code, ty
             if fld.dims:
                 code += self.indices(fld.dims, what)
             elif self.more() and self.peek().is_("("):
@@ -1447,6 +1475,17 @@ class Parser:
             return self.unary()
         return self.primary()
 
+    def save_name(self, what):
+        """Name of the calculator variable of SAVE / LOAD / KILL / EXISTS (a STRING)."""
+        if self.more() and self.peek().kind == "str":
+            n = self.peek().val
+            if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,7}", n):
+                raise CompileError(self.line, f'{what}: "{n}" is not a calculator variable name '
+                                              "(1 to 8 letters or digits, starting with a letter)")
+        e, ty = self.expr()
+        self.same_kind("str", ty, what)
+        return e
+
     def image(self):
         t = self.expect_id()
         im = self.c.images.get(t.val.lower())
@@ -1575,6 +1614,11 @@ class Parser:
             return self.string_function(up)
         if up in ("WIDTH", "HEIGHT", "COLLIDE"):
             return self.image_function(up)
+        if up == "EXISTS":
+            self.expect_op("(")
+            n = self.save_name("EXISTS")
+            self.expect_op(")")
+            return f"b89_exists({n})", "short"
         if t.val.endswith("$") and t.val.lower() not in self.c.procs:
             raise CompileError(self.line, f"unknown function '{t.val}'")
         if up in ("ABS", "MIN", "MAX", "INT", "ROUND", "SQR", "SIN", "COS"):

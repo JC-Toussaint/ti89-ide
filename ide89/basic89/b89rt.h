@@ -624,6 +624,104 @@ B89_FN void b89_play(const char *s)
   }
 }
 
+/* ------------------------------------------------------------ saving (SAVE / LOAD)
+   SAVE writes the bytes of the listed variables into a calculator variable of type OTH
+   (shown as "B89" in the VAR-LINK screen) and archives it in flash memory, where it stays
+   even after a RAM reset. LOAD reads it back only if the size matches (a save made by
+   another version of the program, with other variables, is ignored).
+   Layout of the variable: size (2 bytes), the data, 0 "B89" 0, OTH tag ($F8). */
+#define B89_OTH_TAG 0xF8
+
+B89_FN void b89_symname(char *buf, const char *name)   /* "\0name\0" -> SYM_STR at its end */
+{
+  short i;
+  buf[0] = 0;
+  for (i = 0; name[i] && i < 8; i++)
+    buf[i + 1] = name[i] >= 'A' && name[i] <= 'Z' ? name[i] + 32 : name[i];
+  buf[i + 1] = 0;
+}
+#define B89_SYM(buf) ((SYM_STR)((buf) + 1 + strlen((buf) + 1)))
+
+B89_FN void b89_kill(const char *name)
+{
+  char buf[12];
+  SYM_ENTRY *e;
+  b89_symname(buf, name);
+  e = SymFindPtr(B89_SYM(buf), 0);
+  if (!e)
+    return;
+  if (e->flags.flags_n & SF_ARCHIVED)
+    EM_moveSymFromExtMem(B89_SYM(buf), HS_NULL);
+  SymDel(B89_SYM(buf));
+}
+
+B89_FN short b89_exists(const char *name)
+{
+  char buf[12];
+  b89_symname(buf, name);
+  return SymFindPtr(B89_SYM(buf), 0) != NULL;
+}
+
+B89_FN short b89_save(const char *name, const void *const *ptrs, const short *sizes, short n)
+{
+  char buf[12];
+  long total = 0;
+  short i;
+  HSym hs;
+  HANDLE h;
+  unsigned char *p;
+  for (i = 0; i < n; i++)
+    total += sizes[i];
+  if (total + 8 > 65000L)
+    return 0;
+  b89_kill(name);
+  b89_symname(buf, name);
+  hs = SymAdd(B89_SYM(buf));
+  if (!hs.folder)
+    return 0;
+  h = HeapAlloc(total + 8);
+  if (!h) {
+    SymDel(B89_SYM(buf));
+    return 0;
+  }
+  DerefSym(hs)->handle = h;
+  p = HeapDeref(h);
+  *(unsigned short *)p = total + 6;
+  p += 2;
+  for (i = 0; i < n; i++) {
+    memcpy(p, ptrs[i], sizes[i]);
+    p += sizes[i];
+  }
+  p[0] = 0; p[1] = 'B'; p[2] = '8'; p[3] = '9'; p[4] = 0; p[5] = B89_OTH_TAG;
+  EM_moveSymToExtMem(B89_SYM(buf), HS_NULL);   /* archive (stays in RAM if it fails) */
+  return 1;
+}
+
+B89_FN short b89_load(const char *name, void *const *ptrs, const short *sizes, short n)
+{
+  char buf[12];
+  long total = 0;
+  short i;
+  SYM_ENTRY *e;
+  const unsigned char *p;
+  for (i = 0; i < n; i++)
+    total += sizes[i];
+  b89_symname(buf, name);
+  e = SymFindPtr(B89_SYM(buf), 0);
+  if (!e || !e->handle)
+    return 0;
+  p = HeapDeref(e->handle);
+  if (*(const unsigned short *)p != total + 6 || p[2 + total + 1] != 'B' ||
+      p[2 + total + 2] != '8' || p[2 + total + 3] != '9')
+    return 0;                                  /* not a save of these variables */
+  p += 2;
+  for (i = 0; i < n; i++) {
+    memcpy(ptrs[i], p, sizes[i]);
+    p += sizes[i];
+  }
+  return 1;
+}
+
 /* ------------------------------------------------------------ math */
 static const short b89_qsin[65] = {
       0,   402,   804,  1205,  1606,  2006,  2404,  2801,

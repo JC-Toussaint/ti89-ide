@@ -154,7 +154,7 @@ the speed of a C program. Every generated statement carries a `#line` directive,
 error messages **and the debugger** (breakpoints, stepping, variables) work on the lines of
 the Basic program. *File > New Basic89 Program* creates a small example; F5 runs, F6 debugs.
 Examples: `projets/exemples/balls.b89`, `projets/exemples/orbit.b89` (FIXED numbers, grayscale),
-`projets/exemples/guess.b89` (STRING, INPUT), `projets/exemples/catch.b89` (sprites), `projets/exemples/maze.b89` (tile map, scrolling),
+`projets/exemples/guess.b89` (STRING, INPUT), `projets/exemples/catch.b89` (sprites, sound, saved best score), `projets/exemples/maze.b89` (tile map, scrolling),
 `projets/exemples/cube2.b89` (the 3D cube of `cube.c`).
 
 ```basic
@@ -219,8 +219,13 @@ tempo), `BEEP`. The program waits during the note. Interrupts are off during a n
 an exact pitch (within 0.3 %), except in grayscale (within a few %, the grayscale needs
 them).
 
-Not yet:
-saving data. Comments start with `'` or `REM`; names and keywords ignore case.
+Saving: `SAVE "hiscore", best, names` writes the listed variables (numbers, STRINGs,
+whole arrays, TYPE variables) into a calculator variable (shown as B89 in VAR-LINK) and
+archives it in flash memory, where it survives a RAM reset; `LOAD "hiscore", best, names`
+reads them back (nothing happens if there is no save, or if it was made with other
+variables); `EXISTS("hiscore")`, `KILL "hiscore"`.
+
+Comments start with `'` or `REM`; names and keywords ignore case.
 
 ## Example game
 

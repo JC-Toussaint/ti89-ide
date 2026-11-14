@@ -1,5 +1,6 @@
 ' Catch - Basic89 example of sprites (IMAGE, SPRITE, COLLIDE) in grayscale, and sound
-' (earphones on the link port, through a 2.5 mm adapter)
+' (earphones on the link port, through a 2.5 mm adapter); the best score is saved in the
+' archive (variable catchhi).
 ' LEFT / RIGHT: move the basket. Catch the stars, avoid the bombs.  ESC: quit
 
 IMAGE basket
@@ -37,6 +38,8 @@ END TYPE
 
 DIM t(N) AS Thing
 DIM bx AS INTEGER = 72, score AS INTEGER, lives AS INTEGER = 3, i AS INTEGER
+DIM best AS INTEGER
+LOAD "catchhi", best                  ' the best score of the previous games, if any
 
 SUB drop(k AS INTEGER)
   t(k).x = RND(152)
@@ -75,11 +78,17 @@ DO
   NEXT
   SPRITE basket, bx, 90
   LOCATE 1, 1
-  PRINT "Score "; score; "   Lives "; lives
+  PRINT "Score "; score; "  Lives "; lives; "  Best "; best
   FLIP
   WAITFRAME 32
 LOOP UNTIL lives = 0 OR KEYDOWN(KEY_ESC)
 LOCATE 6, 9
 PRINT "GAME OVER"
+IF score > best THEN
+  best = score
+  SAVE "catchhi", best
+  LOCATE 8, 6
+  PRINT "New best score!"
+END IF
 IF lives = 0 THEN PLAY "T160 O4 L8 G F E D C2"
 WAITKEY
