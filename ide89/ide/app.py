@@ -335,6 +335,14 @@ class IdeApp:
 
         right = tk.Frame(main, bg=UI["bg"], width=360)
         main.add(right, weight=1)
+
+        def keep_lcd_whole(event=None):
+            # The right pane must never be narrower than it asks for, otherwise Tk crops
+            # the calculator screen on both sides: move the sash left when needed.
+            missing = right.winfo_reqwidth() - right.winfo_width()
+            if missing > 0 and right.winfo_width() > 1:
+                main.sashpos(0, max(0, main.sashpos(0) - missing))
+        right.bind("<Configure>", lambda e: self.root.after_idle(keep_lcd_whole))
         # Écran de la TI-89 : clic dessus = le clavier du PC va à la calculatrice
         lf = ttk.Labelframe(right, text="TI-89 Screen", style="Panel.TLabelframe")
         lf.pack(fill="x", padx=6, pady=(6, 0))
