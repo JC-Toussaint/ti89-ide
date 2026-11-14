@@ -128,7 +128,7 @@ static void wait_frame(unsigned short *next)
 
 static void wait_keys_released(void)
 {
-  while (_keytest(RR_ENTER) || _keytest(RR_ESC) || _keytest(RR_UP))
+  while (_keytest(RR_ENTER) || _keytest(RR_ESC))
     ;
 }
 
