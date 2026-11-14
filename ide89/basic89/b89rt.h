@@ -263,7 +263,11 @@ B89_FN void b89_locate(short row, short col)
 /* ------------------------------------------------------------ sprites (IMAGE ... END IMAGE)
    An image is cut in columns of 32 pixels; for each column, 4 tables of h rows:
    mask (0 = opaque pixel), light plane, dark plane, black and white. */
-typedef struct { short w, h, slabs; const unsigned long *data; } b89img;
+typedef struct {
+  short w, h, slabs;
+  const unsigned long *data;
+  const unsigned char *b8;    /* images at most 8 pixels wide: the same 4 tables in bytes */
+} b89img;
 
 B89_FN void b89_sprite(const b89img *im, short x, short y, short xor)
 {
@@ -308,6 +312,207 @@ B89_FN short b89_collide(const b89img *a, short ax, short ay, const b89img *b, s
       if (b89_opaque(a, x - ax, y - ay) && b89_opaque(b, x - bx, y - by))
         return 1;
   return 0;
+}
+
+/* ------------------------------------------------------------ tile maps
+   MAP: draws the part of a 2D INTEGER array (tile numbers; < 0 or too large: nothing)
+   seen from the pixel (sx, sy) of the map, with the images of a TILESET (same size). */
+/* one row of an 8-pixel tile into a screen row: m = opaque pixels, v = pixels to set */
+#define B89_PUT8(row, col, sh, m, v) do { \
+    if ((col) >= 0) \
+      (row)[col] = ((row)[col] & ~((m) >> (sh))) | ((v) >> (sh)); \
+    if ((sh) && (col) + 1 < 30) \
+      (row)[(col) + 1] = ((row)[(col) + 1] & ~(unsigned char)((m) << (8 - (sh)))) | \
+                         (unsigned char)((v) << (8 - (sh))); \
+  } while (0)
+
+#define B89_MAPBUF 3600                 /* bytes: tables of the fast 8-pixel tiles */
+static unsigned char b89_mapbuf[B89_MAPBUF];
+
+B89_FN void b89_map(const short *grid, short rows, short cols,
+                    const b89img *const *tiles, short ntiles, short sx, short sy, short opaque)
+{
+  short tw = tiles[0]->w, th = tiles[0]->h;
+  short c0 = sx >= 0 ? sx / tw : -((-sx + tw - 1) / tw);
+  short r0 = sy >= 0 ? sy / th : -((-sy + th - 1) / th);
+  short x0 = c0 * tw - sx, y0 = r0 * th - sy;
+  short r, c, x, y;
+  unsigned char *scr = b89_buffer ? b89_buffer : LCD_MEM, *pl0 = 0, *pl1 = 0;
+  if (b89_gray) {
+    pl0 = b89_plane(0);
+    pl1 = b89_plane(1);
+  }
+  if (tw == 8 && tiles[0]->b8 && (long)ntiles * th * 6 <= B89_MAPBUF) {
+    /* Fast path, tiles 8 pixels wide: every tile of the map has the same shift inside
+       the screen bytes. Each tile row is shifted once into tables of bytes (left and
+       right byte of: pixels kept, pixels set in the light plane or in black and white,
+       pixels set in the dark plane); then a tile row costs 2 bytes ANDed and ORed per
+       plane, without any shift or multiplication. */
+    short sh = x0 & 7, tn = ntiles * th, t, k;
+    short colbase = x0 >> 3;                     /* -1 or 0 */
+    unsigned char *tmh = b89_mapbuf, *tml = tmh + tn, *tlh = tml + tn, *tll = tlh + tn,
+                  *tdh = tll + tn, *tdl = tdh + tn;
+    for (t = 0; t < ntiles; t++) {
+      const unsigned char *d = tiles[t]->b8;
+      for (k = 0; k < th; k++) {
+        short i = t * th + k;
+        unsigned short mw = ~((unsigned short)(unsigned char)~d[k] << (8 - sh));
+        unsigned short lw = (unsigned short)d[(b89_gray ? 1 : 3) * th + k] << (8 - sh);
+        unsigned short dw = (unsigned short)d[2 * th + k] << (8 - sh);
+        tmh[i] = mw >> 8; tml[i] = mw;
+        tlh[i] = lw >> 8; tll[i] = lw;
+        tdh[i] = dw >> 8; tdl[i] = dw;
+      }
+    }
+    if (opaque && 6L * tn + th <= B89_MAPBUF) {
+      /* Tiles without transparent pixels: each screen byte is made from the two tiles
+         under it and written without reading the screen, column of bytes by column of
+         bytes (a cell without tile, or outside the map, is white). */
+      unsigned char *zero = tmh + 6 * tn;          /* th bytes at 0: no tile */
+      memset(zero, 0, th);
+      for (r = r0, y = y0; y < 100; r++, y += th) {
+        short k0, k1, b, pl;
+        const short *gr;
+        short toffs[22];
+        if (r < 0 || r >= rows)
+          continue;
+        k0 = y < 0 ? -y : 0;
+        k1 = y + th > 100 ? 100 - y : th;
+        gr = grid + (long)r * cols;
+        for (b = 0; b < 22; b++) {                 /* tile numbers of this row */
+          short cc = c0 + b;
+          t = cc >= 0 && cc < cols ? gr[cc] : -1;
+          toffs[b] = t >= 0 && t < ntiles ? t * th : -1;
+        }
+        for (pl = 0; pl < (b89_gray ? 2 : 1); pl++) {
+          const unsigned char *hi = pl ? tdh : tlh, *lo = pl ? tdl : tll;
+          unsigned char *base = (pl ? pl1 : (b89_gray ? pl0 : scr)) + (y + k0) * 30;
+          short n0 = k1 - k0;
+          /* screen byte b: high byte of tile column b - colbase, low byte of the
+             column before */
+          for (b = 0; b < 20; b++) {
+            short jh = b - colbase, n = n0;
+            const unsigned char *hp = toffs[jh] >= 0 ? hi + toffs[jh] + k0 : zero;
+            unsigned char *o = base + b;
+            if (sh) {
+              const unsigned char *lp = jh > 0 && toffs[jh - 1] >= 0 ? lo + toffs[jh - 1] + k0 : zero;
+              for (; n > 0; n--, o += 30)
+                *o = *hp++ | *lp++;
+            } else
+              for (; n > 0; n--, o += 30)
+                *o = *hp++;
+          }
+        }
+      }
+      return;
+    }
+    for (r = r0, y = y0; y < 100; r++, y += th) {
+      short k0, k1, n0, j, toff;
+      const short *gr;
+      unsigned char *row0, *row1;
+      if (r < 0 || r >= rows)
+        continue;
+      k0 = y < 0 ? -y : 0;
+      k1 = y + th > 100 ? 100 - y : th;
+      n0 = k1 - k0;
+      gr = grid + (long)r * cols;
+      row0 = (b89_gray ? pl0 : scr) + (y + k0) * 30 + colbase;
+      row1 = pl1 + (y + k0) * 30 + colbase;
+      for (j = 0, c = c0; c < cols && colbase + j < 20; j++, c++) {
+        short col = colbase + j, n = n0;
+        unsigned char *p0 = row0 + j, *p1 = row1 + j;
+        const unsigned char *qa, *qb, *qe, *qf, *qg, *qh;
+        if (c < 0)
+          continue;
+        t = gr[c];
+        if (t < 0 || t >= ntiles)
+          continue;
+        toff = t * th + k0;
+        qa = tmh + toff; qb = tml + toff; qe = tlh + toff; qf = tll + toff; qg = tdh + toff; qh = tdl + toff;
+        if (b89_gray) {
+          if (!sh)                                   /* aligned: one byte per row */
+            for (; n > 0; n--, p0 += 30, p1 += 30) {
+              unsigned char mm = *qa++;
+              *p0 = (*p0 & mm) | *qe++;
+              *p1 = (*p1 & mm) | *qg++;
+            }
+          else if (col >= 0)                         /* two bytes per row */
+            for (; n > 0; n--, p0 += 30, p1 += 30) {
+              unsigned char m0 = *qa++, m1 = *qb++;
+              p0[0] = (p0[0] & m0) | *qe++;
+              p0[1] = (p0[1] & m1) | *qf++;
+              p1[0] = (p1[0] & m0) | *qg++;
+              p1[1] = (p1[1] & m1) | *qh++;
+            }
+          else                                       /* left edge: right byte only */
+            for (; n > 0; n--, p0 += 30, p1 += 30) {
+              unsigned char m1 = *qb++;
+              p0[1] = (p0[1] & m1) | *qf++;
+              p1[1] = (p1[1] & m1) | *qh++;
+            }
+        } else {
+          if (!sh)
+            for (; n > 0; n--, p0 += 30)
+              *p0 = (*p0 & *qa++) | *qe++;
+          else if (col >= 0)
+            for (; n > 0; n--, p0 += 30) {
+              p0[0] = (p0[0] & *qa++) | *qe++;
+              p0[1] = (p0[1] & *qb++) | *qf++;
+            }
+          else
+            for (; n > 0; n--, p0 += 30)
+              p0[1] = (p0[1] & *qb++) | *qf++;
+        }
+      }
+    }
+    return;
+  }
+  for (r = r0, y = y0; y < 100; r++, y += th) {
+    if (r < 0 || r >= rows)
+      continue;
+    for (c = c0, x = x0; x < 160; c++, x += tw) {
+      short t;
+      const b89img *im;
+      if (c < 0 || c >= cols)
+        continue;
+      t = grid[(long)r * cols + c];
+      if (t < 0 || t >= ntiles)
+        continue;
+      im = tiles[t];
+      if (im->b8) {                      /* 8-pixel tile: bytes written directly */
+        const unsigned char *d = im->b8;
+        short h = im->h, k, sh = x & 7, col = x >> 3;
+        for (k = 0; k < h; k++) {
+          short yy = y + k;
+          unsigned char m;
+          if (yy < 0 || yy >= 100)
+            continue;
+          m = ~d[k];
+          if (b89_gray) {
+            B89_PUT8(pl0 + yy * 30, col, sh, m, d[h + k]);
+            B89_PUT8(pl1 + yy * 30, col, sh, m, d[2 * h + k]);
+          } else
+            B89_PUT8(scr + yy * 30, col, sh, m, d[3 * h + k]);
+        }
+      } else
+        b89_sprite(im, x, y, 0);
+    }
+  }
+}
+
+/* MAPROW: fills a row of the map from a text: 0-9 and a-z (10-35) are tile numbers,
+   any other character (. or space) is -1 (empty) */
+B89_FN void b89_maprow(short *grid, short rows, short cols, long row, const char *s)
+{
+  short c;
+  if (row < 0 || row >= rows)
+    return;
+  for (c = 0; c < cols && s[c]; c++) {
+    char ch = s[c];
+    grid[row * cols + c] = ch >= '0' && ch <= '9' ? ch - '0'
+                         : ch >= 'a' && ch <= 'z' ? ch - 'a' + 10
+                         : ch >= 'A' && ch <= 'Z' ? ch - 'A' + 10 : -1;
+  }
 }
 
 /* ------------------------------------------------------------ math */

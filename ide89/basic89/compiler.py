@@ -82,7 +82,7 @@ KEYWORDS = set("""
 AND AS BOX CALL CASE CIRCLE CLS CONST DELAY DIM DO ELSE ELSEIF END EXIT FILL FLIP FOR
 FUNCTION IF LINE LOCATE LOOP MOD NEXT NOT OR PRINT PSET RETURN SCREEN STEP SUB THEN TO
 UNTIL WAITFRAME WAITKEY WEND WHILE BUFFERED DIRECT SELECT IS TYPE INPUT INCLUDE COLOR GRAY4
-IMAGE SPRITE
+IMAGE SPRITE TILESET MAP MAPROW
 """.split())
 
 TYPES = {"INTEGER": "short", "LONG": "long", "BOOLEAN": "short", "FIXED": "fixed",
@@ -233,6 +233,7 @@ class Compiler:
         self.procs = {}
         self.records = {}
         self.images = {}
+        self.tilesets = {}          # name -> (display name, [Image])
         self.proc = None            # Proc being compiled (None: main program)
         self.locals = {}
         self.out = None             # current body (list of C lines)
@@ -376,6 +377,24 @@ class Compiler:
                 if len(img.rows) > 100:
                     raise CompileError(line, "an IMAGE is at most 100 rows high")
                 continue
+            if toks[0].is_("TILESET"):
+                p = Parser(self, toks, 1)
+                name = p.expect_id()
+                self.check_new_name(name.val, line, self.tilesets)
+                p.expect_op("=")
+                imgs = [p.image()]
+                while p.more():
+                    p.expect_op(",")
+                    imgs.append(p.image())
+                size = (len(imgs[0].rows[0]), len(imgs[0].rows))
+                for im in imgs:
+                    if (len(im.rows[0]), len(im.rows)) != size:
+                        raise CompileError(line, f"the images of a TILESET must have the same "
+                                                 f"size: {im.display} is not {size[0]}x{size[1]}")
+                if len(imgs) > 36:
+                    raise CompileError(line, "a TILESET has at most 36 images (0-9, a-z)")
+                self.tilesets[name.val.lower()] = (name.val, imgs)
+                continue
             if toks[0].is_("IMAGE"):
                 if len(toks) != 2 or toks[1].kind != "id":
                     raise CompileError(line, "expected IMAGE name")
@@ -446,7 +465,16 @@ class Compiler:
             w, h, slabs, data = im.c_data()
             vals = ", ".join(f"0x{v:08X}" for v in data)
             lines.append(f"static const unsigned long b89i_{im.name}_d[] = {{{vals}}};")
-            lines.append(f"static const b89img b89i_{im.name} = {{{w}, {h}, {slabs}, b89i_{im.name}_d}};")
+            b8 = "0"
+            if w <= 8:                         # bytes for the fast 8-pixel tiles of MAP
+                vals8 = ", ".join(str(v >> 24) for v in data)
+                lines.append(f"static const unsigned char b89i_{im.name}_b[] = {{{vals8}}};")
+                b8 = f"b89i_{im.name}_b"
+            lines.append(f"static const b89img b89i_{im.name} = {{{w}, {h}, {slabs}, "
+                         f"b89i_{im.name}_d, {b8}}};")
+        for key, (_, imgs) in self.tilesets.items():
+            refs = ", ".join(f"&b89i_{im.name}" for im in imgs)
+            lines.append(f"static const b89img *const b89ts_{key}[] = {{{refs}}};")
         for r in self.records.values():
             lines.append("typedef struct {")
             for f in r.fields.values():
@@ -585,11 +613,14 @@ class Compiler:
         if word == "DIM":
             self.dim(p, line)
         elif word == "CONST":
-            name = p.expect_id()
-            self.check_new_name(name.val, line, self.consts)
-            p.expect_op("=")
-            self.consts[name.val.lower()] = p.const_value()
-            p.end()
+            while True:                       # CONST A = 1, B = 2
+                name = p.expect_id()
+                self.check_new_name(name.val, line, self.consts)
+                p.expect_op("=")
+                self.consts[name.val.lower()] = p.const_value()
+                if not p.more():
+                    break
+                p.expect_op(",")
         elif word == "IF":
             cond = p.condition()
             p.expect_word("THEN")
@@ -821,6 +852,33 @@ class Compiler:
                 xor = 1
             p.end()
             self.emit(line, f"b89_sprite(&b89i_{im.name}, {a[0]}, {a[1]}, {xor});")
+        elif word in ("MAP", "MAPROW"):
+            g = p.expect_id()
+            v = self.lookup(g.val, line)
+            if not v.dims or len(v.dims) != 2 or v.ctype != "short":
+                raise CompileError(line, f"{word}: '{g.val}' must be a 2-dimension INTEGER array "
+                                         f"(DIM {g.val}(rows, columns) AS INTEGER)")
+            grid = f"&{v.ref}[0][0]"
+            rows, cols = v.dims[0] + 1, v.dims[1] + 1
+            p.expect_op(",")
+            if word == "MAP":
+                ts = p.expect_id()
+                if ts.val.lower() not in self.tilesets:
+                    raise CompileError(line, f"'{ts.val}' is not a TILESET")
+                n = len(self.tilesets[ts.val.lower()][1])
+                p.expect_op(",")
+                sx, sy = p.args(2)
+                opaque = all(PIXELS[ch] is not None for im in self.tilesets[ts.val.lower()][1]
+                             for row in im.rows for ch in row)
+                self.emit(line, f"b89_map({grid}, {rows}, {cols}, b89ts_{ts.val.lower()}, {n}, "
+                                f"{sx}, {sy}, {int(opaque)});")
+            else:
+                r = conv(*p.num_expr(), "long")
+                p.expect_op(",")
+                e, ty = p.expr()
+                p.end()
+                p.same_kind("str", ty, "MAPROW")
+                self.emit(line, f"b89_maprow({grid}, {rows}, {cols}, {r}, {e});")
         elif word == "COLOR":
             (c,) = p.args(1)
             self.emit(line, f"b89_color = {c};")
@@ -1164,10 +1222,11 @@ class Parser:
     def same_kind(self, to, frm, what):
         """Text and numbers do not mix: STRING only with STRING."""
         if (to == "str") != (frm == "str"):
-            act = "assign" if what in ("=", "DIM") else f"{what}: use"
-            raise CompileError(self.line, f"cannot {act} {self.c.tname(frm)} "
-                                          f"{'to' if act == 'assign' else 'as'} {self.c.tname(to)} "
-                                          "(STR$() and VAL() convert)")
+            if what in ("=", "DIM"):
+                msg = f"cannot assign {self.c.tname(frm)} to {self.c.tname(to)}"
+            else:
+                msg = f"{what}: a {self.c.tname(to)} is expected, not {self.c.tname(frm)}"
+            raise CompileError(self.line, msg + " (STR$() and VAL() convert)")
 
     def writable(self, name_tok):
         v = self.c.locals.get(name_tok.val.lower()) if self.c.proc else None
@@ -1238,7 +1297,8 @@ class Parser:
 
     def const_value(self):
         """(value, type) of a constant expression; a FIXED value is stored * 65536."""
-        if self.more() and self.peek().kind == "str" and self.i + 1 == len(self.toks):
+        if self.more() and self.peek().kind == "str" and (
+                self.i + 1 == len(self.toks) or self.toks[self.i + 1].is_(",")):
             return f'"{c_string(self.next().val, self.line)}"', "str"
         e, ty = self.num_expr()
         try:

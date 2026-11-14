@@ -154,7 +154,7 @@ the speed of a C program. Every generated statement carries a `#line` directive,
 error messages **and the debugger** (breakpoints, stepping, variables) work on the lines of
 the Basic program. *File > New Basic89 Program* creates a small example; F5 runs, F6 debugs.
 Examples: `projets/exemples/balls.b89`, `projets/exemples/orbit.b89` (FIXED numbers, grayscale),
-`projets/exemples/guess.b89` (STRING, INPUT), `projets/exemples/catch.b89` (sprites),
+`projets/exemples/guess.b89` (STRING, INPUT), `projets/exemples/catch.b89` (sprites), `projets/exemples/maze.b89` (tile map, scrolling),
 `projets/exemples/cube2.b89` (the 3D cube of `cube.c`).
 
 ```basic
@@ -173,7 +173,7 @@ LOOP UNTIL KEYDOWN(KEY_ESC)
 | | |
 |---|---|
 | Types | `INTEGER` (16 bits), `LONG` (32 bits), `BOOLEAN`, `FIXED` (decimal number in fixed point: -32768 to 32767.99998, step 1/65536, fast since computed with integers; `x = 2.5`, mixed with integers automatically, a FIXED stored in an integer is rounded down), `STRING` (text up to 255 characters, or `STRING * 20` for a shorter maximum; longer text is cut); arrays `DIM a(10) AS INTEGER` (indices 0 to 10), also with several dimensions `DIM map(20, 12) AS INTEGER`; records `TYPE Enemy` / `x AS INTEGER` / `pos AS Point` / `trail(3) AS INTEGER` / `END TYPE`, used as `e(3).pos.x`, copied with `a = b`. Every variable must be declared with `DIM`; `DIM` sets it to 0 unless `= value` is given |
-| Declarations | `DIM`, `CONST`, `INCLUDE "file.b89"`, `SUB name(p AS INTEGER, ...)` ... `END SUB`, `FUNCTION name(...) AS LONG` ... `RETURN value` ... `END FUNCTION`. A `DIM` outside a SUB/FUNCTION is a global variable. Numbers and STRINGs are passed to a SUB/FUNCTION by value (a STRING parameter cannot be changed), TYPE variables by reference (the SUB can change them) |
+| Declarations | `DIM`, `CONST` (several per line), `INCLUDE "file.b89"`, `SUB name(p AS INTEGER, ...)` ... `END SUB`, `FUNCTION name(...) AS LONG` ... `RETURN value` ... `END FUNCTION`. A `DIM` outside a SUB/FUNCTION is a global variable. Numbers and STRINGs are passed to a SUB/FUNCTION by value (a STRING parameter cannot be changed), TYPE variables by reference (the SUB can change them) |
 | Control | `IF ... THEN` / `ELSEIF` / `ELSE` / `END IF` (or on one line), `FOR ... TO ... STEP` / `NEXT`, `DO [WHILE\|UNTIL]` / `LOOP [WHILE\|UNTIL]`, `WHILE` / `WEND`, `SELECT CASE` / `CASE 1, 3 TO 5, IS > 10` / `CASE ELSE` / `END SELECT`, `EXIT FOR\|DO\|WHILE\|SUB\|FUNCTION`, `END` (stops the program, also from a SUB or FUNCTION); statements can be separated by `:` |
 | Operators | `+ - * / \ MOD` (integer division), `+` joins STRINGs (`s += "x"` appends), comparisons also work on STRINGs, `= <> < > <= >=`, `AND OR NOT`, `x += 1`, `-=`, `*=`; numbers in decimal, `&H1F`, `&B101` |
 | Screen | `CLS`, `PRINT a; "text"; b`, `INPUT "Name? "; v` (text or number typed on the keyboard), `LOCATE row, col`, `PSET x, y`, `LINE x1, y1, x2, y2`, `BOX x1, y1, x2, y2 [FILL]`, `CIRCLE x, y, r [FILL]` (optional colour; everything is clipped to the screen), `COLOR c` (default colour), `SCREEN BUFFERED` + `FLIP` (draw in a hidden screen, then show it: no flicker), `SCREEN GRAY4 [BUFFERED]` (4 shades: `WHITE`, `LIGHTGRAY`, `DARKGRAY`, `BLACK`, plus `XOR`; text is black, typed text dark gray), `SCREEN DIRECT` (back to black and white) |
@@ -201,6 +201,15 @@ END IMAGE
 SPRITE star, x, y
 IF COLLIDE(star, x, y, basket, bx, 90) THEN score += 1
 ```
+
+Tile maps: `TILESET tiles = wall, floor, door` groups IMAGEs of the same size (tile 0, 1,
+2...); the map is a 2-dimension INTEGER array, filled for example row by row with
+`MAPROW maze, 3, "0110201"` (0-9 and a-z are tile numbers, `.` or a space an empty cell);
+`MAP maze, tiles, scrollx, scrolly` draws the part seen from that pixel of the map
+(smooth scrolling). Tiles 8 pixels wide are drawn by a fast routine, even faster when
+they have no transparent pixel (then empty cells are white): a full screen of 8x8 tiles
+costs about 20 ms in black and white, 36 ms in grayscale. The tile under a point is
+simply `maze(y \ 8, x \ 8)`.
 
 Not yet: sound,
 saving data. Comments start with `'` or `REM`; names and keywords ignore case.

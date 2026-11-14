@@ -1,0 +1,99 @@
+' Maze - Basic89 example of tile maps (TILESET, MAPROW, MAP) with scrolling
+' The maze is larger than the screen: it scrolls with you. Find the exit (E).
+' ARROWS: move    ESC: quit
+
+IMAGE wall
+  "########"
+  "#++#++++"
+  "#++#++++"
+  "########"
+  "++++#++#"
+  "++++#++#"
+  "########"
+  "#++#++++"
+END IMAGE
+
+IMAGE floor
+  "::::::::"
+  ":wwwwww:"
+  ":wwwwww:"
+  ":wwwwww:"
+  ":wwwwww:"
+  ":wwwwww:"
+  ":wwwwww:"
+  "::::::::"
+END IMAGE
+
+IMAGE door
+  "########"
+  "#::::::#"
+  "#:####:#"
+  "#:#ww#:#"
+  "#:#ww#:#"
+  "#:####:#"
+  "#::::::#"
+  "########"
+END IMAGE
+
+IMAGE hero
+  "..####.."
+  ".#wwww#."
+  "#w#ww#w#"
+  "#wwwwww#"
+  "#w####w#"
+  ".#wwww#."
+  "..#..#.."
+  ".##..##."
+END IMAGE
+
+TILESET tiles = wall, floor, door      ' tile 0, 1, 2
+
+CONST ROWS = 15, COLS = 30
+DIM maze(ROWS - 1, COLS - 1) AS INTEGER
+DIM px AS INTEGER = 8, py AS INTEGER = 8       ' hero, in pixels on the map
+DIM camx AS INTEGER, camy AS INTEGER, nx AS INTEGER, ny AS INTEGER, steps AS LONG
+
+MAPROW maze, 0,  "000000000000000000000000000000"
+MAPROW maze, 1,  "011111111101111111111111111110"
+MAPROW maze, 2,  "010000000101000000000100000010"
+MAPROW maze, 3,  "010111110101011111110101111010"
+MAPROW maze, 4,  "010100010111010000010101001010"
+MAPROW maze, 5,  "010101010000010111010111011010"
+MAPROW maze, 6,  "011101011111110101010000010010"
+MAPROW maze, 7,  "000001000000000101011111110110"
+MAPROW maze, 8,  "011111011111111101000000000100"
+MAPROW maze, 9,  "010000010000000001111111110110"
+MAPROW maze, 10, "010111110111111100000000010010"
+MAPROW maze, 11, "010100000100000111111111011010"
+MAPROW maze, 12, "010101111101110000000001000010"
+MAPROW maze, 13, "011101000001011111111111111120"
+MAPROW maze, 14, "000000000000000000000000000000"
+
+' is the 8x8 square at (x, y) free (no wall under its corners)?
+FUNCTION free(x AS INTEGER, y AS INTEGER) AS BOOLEAN
+  RETURN maze(y \ 8, x \ 8) <> 0 AND maze(y \ 8, (x + 7) \ 8) <> 0 AND maze((y + 7) \ 8, x \ 8) <> 0 AND maze((y + 7) \ 8, (x + 7) \ 8) <> 0
+END FUNCTION
+
+SCREEN GRAY4 BUFFERED
+DO
+  nx = px : ny = py
+  IF KEYDOWN(KEY_LEFT) THEN nx -= 2
+  IF KEYDOWN(KEY_RIGHT) THEN nx += 2
+  IF free(nx, py) THEN px = nx
+  IF KEYDOWN(KEY_UP) THEN ny -= 2
+  IF KEYDOWN(KEY_DOWN) THEN ny += 2
+  IF free(px, ny) THEN py = ny
+  steps += 1
+
+  ' the camera follows the hero, without leaving the maze
+  camx = MAX(0, MIN(px - 76, COLS * 8 - 160))
+  camy = MAX(0, MIN(py - 46, ROWS * 8 - 100))
+  CLS
+  MAP maze, tiles, camx, camy
+  SPRITE hero, px - camx, py - camy
+  FLIP
+  WAITFRAME 32
+LOOP UNTIL maze((py + 4) \ 8, (px + 4) \ 8) = 2 OR KEYDOWN(KEY_ESC)
+CLS
+PRINT "Out in "; steps \ 32; " seconds!"
+WAITKEY
