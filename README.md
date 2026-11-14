@@ -153,7 +153,7 @@ A `.b89` program is translated to C (`program.b89.c`) and compiled by GCC4TI: it
 the speed of a C program. Every generated statement carries a `#line` directive, so the
 error messages **and the debugger** (breakpoints, stepping, variables) work on the lines of
 the Basic program. *File > New Basic89 Program* creates a small example; F5 runs, F6 debugs.
-Examples: `projets/exemples/balls.b89`, `projets/exemples/orbit.b89` (FIXED numbers),
+Examples: `projets/exemples/balls.b89`, `projets/exemples/orbit.b89` (FIXED numbers, grayscale),
 `projets/exemples/guess.b89` (STRING, INPUT),
 `projets/exemples/cube2.b89` (the 3D cube of `cube.c`).
 
@@ -176,7 +176,7 @@ LOOP UNTIL KEYDOWN(KEY_ESC)
 | Declarations | `DIM`, `CONST`, `INCLUDE "file.b89"`, `SUB name(p AS INTEGER, ...)` ... `END SUB`, `FUNCTION name(...) AS LONG` ... `RETURN value` ... `END FUNCTION`. A `DIM` outside a SUB/FUNCTION is a global variable. Numbers and STRINGs are passed to a SUB/FUNCTION by value (a STRING parameter cannot be changed), TYPE variables by reference (the SUB can change them) |
 | Control | `IF ... THEN` / `ELSEIF` / `ELSE` / `END IF` (or on one line), `FOR ... TO ... STEP` / `NEXT`, `DO [WHILE\|UNTIL]` / `LOOP [WHILE\|UNTIL]`, `WHILE` / `WEND`, `SELECT CASE` / `CASE 1, 3 TO 5, IS > 10` / `CASE ELSE` / `END SELECT`, `EXIT FOR\|DO\|WHILE\|SUB\|FUNCTION`, `END` (stops the program, also from a SUB or FUNCTION); statements can be separated by `:` |
 | Operators | `+ - * / \ MOD` (integer division), `+` joins STRINGs (`s += "x"` appends), comparisons also work on STRINGs, `= <> < > <= >=`, `AND OR NOT`, `x += 1`, `-=`, `*=`; numbers in decimal, `&H1F`, `&B101` |
-| Screen | `CLS`, `PRINT a; "text"; b`, `INPUT "Name? "; v` (text or number typed on the keyboard), `LOCATE row, col`, `PSET x, y`, `LINE x1, y1, x2, y2`, `BOX x1, y1, x2, y2 [FILL]`, `CIRCLE x, y, r` (optional colour `BLACK`, `WHITE`, `XOR`; everything is clipped to the screen), `SCREEN BUFFERED` + `FLIP` (draw in a hidden screen, then show it: no flicker) |
+| Screen | `CLS`, `PRINT a; "text"; b`, `INPUT "Name? "; v` (text or number typed on the keyboard), `LOCATE row, col`, `PSET x, y`, `LINE x1, y1, x2, y2`, `BOX x1, y1, x2, y2 [FILL]`, `CIRCLE x, y, r [FILL]` (optional colour; everything is clipped to the screen), `COLOR c` (default colour), `SCREEN BUFFERED` + `FLIP` (draw in a hidden screen, then show it: no flicker), `SCREEN GRAY4 [BUFFERED]` (4 shades: `WHITE`, `LIGHTGRAY`, `DARKGRAY`, `BLACK`, plus `XOR`; text is black, typed text dark gray), `SCREEN DIRECT` (back to black and white) |
 | Time, keys | `WAITFRAME fps` (steady frame rate), `DELAY ms`, `TICKS` (256 Hz counter), `KEYDOWN(KEY_LEFT)` (keys held, several at once: `KEY_UP`, `KEY_ENTER`, `KEY_ESC`, `KEY_F1`...), `GETKEY()`, `WAITKEY` (both show the hidden screen first) |
 | Functions | `RND(n)` (0 to n-1), `ABS`, `MIN`, `MAX`, `INT` (rounded down), `ROUND`, `SQR`, `SIN`, `COS` (radians), `PI`; text: `LEN`, `LEFT$`, `RIGHT$`, `MID$(s, start[, n])`, `UCASE$`, `LCASE$`, `INSTR(s, find)`, `CHR$`, `ASC`, `STR$(number)`, `VAL(text)` (a FIXED); a FUNCTION returning a STRING may have a name ending with `$`; `ISIN(angle)`, `ICOS(angle)` (integers only: angle in 1/256 of a turn, result in 1/16384) |
 
@@ -185,7 +185,7 @@ included several times is read once); errors in it are reported with its name, a
 clicking them opens it. The debugger stops and steps only in the main file for now: the
 SUBs of an included file run as one step.
 
-Not yet: grayscale, sprites, sound,
+Not yet: sprites, sound,
 saving data. Comments start with `'` or `REM`; names and keywords ignore case.
 
 ## Example game

@@ -22,10 +22,28 @@ DEFINE_INT_HANDLER(b89_tick_handler)
   ExecuteHandler(b89_old_ai1);
 }
 
-/* ------------------------------------------------------------ screen */
+/* ------------------------------------------------------------ screen
+   Modes: SCREEN DIRECT (default), SCREEN BUFFERED (draw in a hidden screen, FLIP shows
+   it), SCREEN GRAY4 [BUFFERED] (4 shades of gray: two planes, light and dark).
+   Colours: 0 WHITE, 1 LIGHTGRAY, 2 DARKGRAY, 3 BLACK, 4 XOR. In grayscale, bit 0 of the
+   colour is the light plane and bit 1 the dark plane; in black and white, every colour
+   but WHITE draws black. */
 static void *b89_buffer;          /* hidden screen of SCREEN BUFFERED */
+#ifdef B89_GRAY                   /* defined by the compiler when the program uses GRAY4 */
+static short b89_gray;            /* SCREEN GRAY4 */
+static char *b89_gplanes;         /* hidden light + dark planes of SCREEN GRAY4 BUFFERED */
+#define B89_LIGHT GrayGetPlane(LIGHT_PLANE)
+#define B89_DARK GrayGetPlane(DARK_PLANE)
+#else                             /* no grayscale: the grayscale library is not linked */
+#define b89_gray 0
+#define b89_gplanes ((char *)0)
+#define B89_LIGHT ((void *)0)
+#define B89_DARK ((void *)0)
+#endif
+static short b89_color = 3;       /* COLOR: default colour */
 static unsigned long b89_next_frame;
 static const SCR_RECT b89_clip = {{0, 0, 159, 99}};
+static char b89_pbuf[800];        /* text of one PRINT */
 
 B89_FN void b89_init(void)
 {
@@ -37,8 +55,36 @@ B89_FN void b89_init(void)
   b89_next_frame = b89_ticks;
 }
 
+/* plane where the drawing goes in grayscale: 0 light, 1 dark */
+B89_FN void *b89_plane(short p)
+{
+  return b89_gplanes ? b89_gplanes + p * LCD_SIZE : p ? B89_DARK : B89_LIGHT;
+}
+
+/* the AMS port (target of the drawing and text functions) on another screen, keeping
+   the text position */
+B89_FN void b89_port(void *addr)
+{
+  SCR_STATE st;
+  SaveScrState(&st);
+  st.ScrAddr = addr;
+  RestoreScrState(&st);
+}
+
+B89_FN void b89_leave_gray(void)
+{
+#ifdef B89_GRAY
+  if (b89_gray) {
+    if (b89_gplanes) { free(b89_gplanes); b89_gplanes = NULL; }
+    GrayOff();
+    b89_gray = 0;
+  }
+#endif
+}
+
 B89_FN void b89_exit(void)
 {
+  b89_leave_gray();
   if (b89_buffer) {
     PortRestore();
     free(b89_buffer);
@@ -48,25 +94,73 @@ B89_FN void b89_exit(void)
   GKeyFlush();
 }
 
-B89_FN void b89_screen(short buffered)
+B89_FN void b89_screen(short gray, short buffered)
 {
-  if (buffered && !b89_buffer) {
-    b89_buffer = malloc(LCD_SIZE);
-    if (b89_buffer) {
-      memcpy(b89_buffer, LCD_MEM, LCD_SIZE);   /* starts with what is on the screen */
-      PortSet(b89_buffer, 239, 127);
-    }
-  } else if (!buffered && b89_buffer) {
+  if (!gray)
+    b89_leave_gray();
+  if (b89_buffer && (gray || !buffered)) {
     PortRestore();
     free(b89_buffer);
     b89_buffer = NULL;
+  }
+  if (gray) {
+#ifdef B89_GRAY
+    if (!b89_gray) {
+      if (!GrayOn())
+        return;                                  /* not enough memory: stays in black and white */
+      b89_gray = 1;
+    }
+    if (buffered && !b89_gplanes)
+      b89_gplanes = calloc(2, LCD_SIZE);
+    else if (!buffered && b89_gplanes) {
+      free(b89_gplanes);
+      b89_gplanes = NULL;
+    }
+    memset(b89_plane(0), 0, LCD_SIZE);           /* the grayscale screen starts empty */
+    memset(b89_plane(1), 0, LCD_SIZE);
+    PortSet(b89_plane(0), 239, 127);
+    MoveTo(0, 0);
+#endif
+  } else if (buffered && !b89_buffer) {
+    b89_buffer = malloc(LCD_SIZE);
+    if (b89_buffer) {
+      memcpy(b89_buffer, LCD_MEM, LCD_SIZE);     /* starts with what is on the screen */
+      PortSet(b89_buffer, 239, 127);
+    }
   }
 }
 
 B89_FN void b89_flip(void)
 {
-  if (b89_buffer)
+  if (b89_gplanes) {
+    memcpy(B89_LIGHT, b89_gplanes, LCD_SIZE);
+    memcpy(B89_DARK, b89_gplanes + LCD_SIZE, LCD_SIZE);
+  } else if (b89_buffer)
     memcpy(LCD_MEM, b89_buffer, LCD_SIZE);
+}
+
+B89_FN void b89_cls(void)
+{
+  if (b89_gray) {
+    memset(b89_plane(1), 0, LCD_SIZE);
+    PortSet(b89_plane(0), 239, 127);
+  }
+  clrscr();
+}
+
+/* PRINT: in grayscale the text is written in black, on both planes at the same place */
+B89_FN void b89_puts(const char *s)
+{
+  if (b89_gray) {
+    SCR_STATE st;
+    SaveScrState(&st);
+    st.ScrAddr = b89_plane(1);
+    RestoreScrState(&st);
+    printf("%s", s);
+    st.ScrAddr = b89_plane(0);
+    RestoreScrState(&st);
+  }
+  printf("%s", s);
 }
 
 /* WAITKEY / GETKEY: show the hidden screen first (SCREEN BUFFERED), otherwise the
@@ -95,16 +189,35 @@ B89_FN void b89_delay(long ms)
     ;
 }
 
-/* ------------------------------------------------------------ drawing (clipped) */
+/* ------------------------------------------------------------ drawing (clipped)
+   B89_DRAW(colour, statement): runs the statement with 'attr' set for each plane
+   (grayscale) or once (black and white). Colour -1: the COLOR in use. */
+B89_FN short b89_attr(short color, short plane)
+{
+  if (color == 4)
+    return A_XOR;
+  if (plane < 0)
+    return color ? A_NORMAL : A_REVERSE;
+  return (color >> plane) & 1 ? A_NORMAL : A_REVERSE;
+}
+
+#define B89_DRAW(color, STATEMENT) do { \
+    short b89_c_ = (color) < 0 ? b89_color : (color), attr; \
+    if (b89_gray) { \
+      PortSet(b89_plane(1), 239, 127); attr = b89_attr(b89_c_, 1); STATEMENT; \
+      PortSet(b89_plane(0), 239, 127); attr = b89_attr(b89_c_, 0); STATEMENT; \
+    } else { attr = b89_attr(b89_c_, -1); STATEMENT; } \
+  } while (0)
+
 B89_FN void b89_pset(short x, short y, short color)
 {
   if (x >= 0 && x < 160 && y >= 0 && y < 100)
-    DrawPix(x, y, color);
+    B89_DRAW(color, DrawPix(x, y, attr));
 }
 
 B89_FN void b89_line(short x1, short y1, short x2, short y2, short color)
 {
-  DrawClipLine(&(WIN_RECT){x1, y1, x2, y2}, &b89_clip, color);
+  B89_DRAW(color, DrawClipLine(&(WIN_RECT){x1, y1, x2, y2}, &b89_clip, attr));
 }
 
 B89_FN void b89_box(short x1, short y1, short x2, short y2, short color, short fill)
@@ -115,17 +228,31 @@ B89_FN void b89_box(short x1, short y1, short x2, short y2, short color, short f
   if (fill) {
     if (x2 < 0 || y2 < 0 || x1 > 159 || y1 > 99)
       return;
-    ScrRectFill(&(SCR_RECT){{x1 < 0 ? 0 : x1, y1 < 0 ? 0 : y1,
-                             x2 > 159 ? 159 : x2, y2 > 99 ? 99 : y2}}, &b89_clip,
-                color == A_XOR ? A_XOR : color == A_REVERSE ? A_REVERSE : A_NORMAL);
+    if (x1 < 0) x1 = 0;
+    if (y1 < 0) y1 = 0;
+    if (x2 > 159) x2 = 159;
+    if (y2 > 99) y2 = 99;
+    B89_DRAW(color, ScrRectFill(&(SCR_RECT){{x1, y1, x2, y2}}, &b89_clip, attr));
   } else
-    DrawClipRect(&(WIN_RECT){x1, y1, x2, y2}, &b89_clip, color);
+    B89_DRAW(color, DrawClipRect(&(WIN_RECT){x1, y1, x2, y2}, &b89_clip, attr));
 }
 
-B89_FN void b89_circle(short x, short y, short r, short color)
+B89_FN void b89_circle(short x, short y, short r, short color, short fill)
 {
-  if (r > 0)
-    DrawClipEllipse(x, y, r, r, &b89_clip, color);
+  if (r <= 0)
+    return;
+  if (fill) {                         /* a disc: one horizontal line per row */
+    short dy, dx = r;
+    long r2 = (long)r * r + r;        /* + r: rounder edges */
+    for (dy = 0; dy <= r; dy++) {
+      while (dx > 0 && (long)dx * dx + (long)dy * dy > r2)
+        dx--;
+      B89_DRAW(color, DrawClipLine(&(WIN_RECT){x - dx, y - dy, x + dx, y - dy}, &b89_clip, attr));
+      if (dy)
+        B89_DRAW(color, DrawClipLine(&(WIN_RECT){x - dx, y + dy, x + dx, y + dy}, &b89_clip, attr));
+    }
+  } else
+    B89_DRAW(color, DrawClipEllipse(x, y, r, r, &b89_clip, attr));
 }
 
 B89_FN void b89_locate(short row, short col)
@@ -258,19 +385,26 @@ B89_FN long b89_instr(const char *s, const char *f)        /* position (1 = firs
   return p ? p - s + 1 : 0;
 }
 
-/* INPUT: typed on the real screen (also in SCREEN BUFFERED mode) */
+/* INPUT: typed on the real screen (also in SCREEN BUFFERED / GRAY4 modes; in grayscale
+   the typed text is dark gray) */
 B89_FN void b89_input(char *d, short cap)
 {
-  if (b89_buffer) {
-    b89_flip();
-    PortRestore();
-  }
+  b89_flip();
+  if (b89_gray)
+    b89_port(B89_DARK);
+  else if (b89_buffer)
+    b89_port(LCD_MEM);
   getsn(d, cap);
   putchar('\n');                             /* like PRINT: next line */
-  if (b89_buffer) {
+  if (b89_gplanes) {                         /* the hidden screen gets what was typed */
+    memcpy(b89_gplanes, B89_LIGHT, LCD_SIZE);
+    memcpy(b89_gplanes + LCD_SIZE, B89_DARK, LCD_SIZE);
+  } else if (b89_buffer)
     memcpy(b89_buffer, LCD_MEM, LCD_SIZE);
-    PortSet(b89_buffer, 239, 127);
-  }
+  if (b89_gray)
+    b89_port(b89_plane(0));
+  else if (b89_buffer)
+    b89_port(b89_buffer);
 }
 
 /* ------------------------------------------------------------ FIXED (16.16 fixed point)

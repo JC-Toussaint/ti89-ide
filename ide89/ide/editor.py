@@ -62,7 +62,7 @@ _BAS_TOKEN_RE = re.compile(
     re.I)
 _BAS_TYPES = {"INTEGER", "LONG", "BOOLEAN"}
 _BAS_BUILTINS = {"KEYDOWN", "RND", "ABS", "MIN", "MAX", "ISIN", "ICOS", "GETKEY", "TICKS",
-                 "TRUE", "FALSE", "BLACK", "WHITE", "XOR"}
+                 "TRUE", "FALSE", "BLACK", "WHITE", "XOR", "LIGHTGRAY", "DARKGRAY"}
 
 
 class CodeEditor(tk.Frame):
