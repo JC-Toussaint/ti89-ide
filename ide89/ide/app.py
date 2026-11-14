@@ -356,7 +356,7 @@ class IdeApp:
         self.lcd.bind("<KeyRelease>", self._on_lcd_key_release)
         self.held = {}              # flèches maintenues : touche TI -> id de relâchement différé
         self.lcd.bind("<FocusIn>", lambda e: self._lcd_hint())
-        self.lcd.bind("<FocusOut>", lambda e: self._lcd_hint())
+        self.lcd.bind("<FocusOut>", self._on_lcd_focus_out)
         self.emu_status = tk.Label(lf, text="Starting the emulated calculator…",
                                    bg=UI["panel"], fg=UI["muted"], font=(SANS, 9),
                                    anchor="w", justify="left")
@@ -1157,10 +1157,21 @@ class IdeApp:
             self.held[k] = self.root.after(60, release)
         return "break"
 
+    def _on_lcd_focus_out(self, event=None):
+        # The key releases now go to another widget: release the arrows held on the
+        # calculator, otherwise they would stay pressed (a game would seem frozen).
+        for k, pending in list(self.held.items()):
+            if pending:
+                self.root.after_cancel(pending)
+            self.session.calc.key_up(k)
+        self.held.clear()
+        self._lcd_hint()
+
     def _lcd_hint(self):
         if not self.session.ready:
             return
-        if self.root.focus_get() is self.lcd:
+        # Compared by name: focus_get() fails when the focus is in a menu ("#!menu")
+        if self.root.tk.call("focus") == str(self.lcd):
             txt = "⌨ Keyboard → TI-89\nEnter=ENTER  Esc=ESC  Home=HOME  F1…F5"
         else:
             txt = "Click the screen to type\non the TI-89 keyboard."
