@@ -43,7 +43,7 @@ static char *b89_gplanes;         /* hidden light + dark planes of SCREEN GRAY4 
 static short b89_color = 3;       /* COLOR: default colour */
 static unsigned long b89_next_frame;
 static const SCR_RECT b89_clip = {{0, 0, 159, 99}};
-static char b89_pbuf[800];        /* text of one PRINT */
+static char b89_pbuf[800] __attribute__((unused));   /* text of one PRINT */
 
 B89_FN void b89_init(void)
 {
@@ -512,6 +512,115 @@ B89_FN void b89_maprow(short *grid, short rows, short cols, long row, const char
     grid[row * cols + c] = ch >= '0' && ch <= '9' ? ch - '0'
                          : ch >= 'a' && ch <= 'z' ? ch - 'a' + 10
                          : ch >= 'A' && ch <= 'Z' ? ch - 'A' + 10 : -1;
+  }
+}
+
+/* ------------------------------------------------------------ sound
+   The TI-89 has no speaker: the sound is a square wave on the two wires of the 2.5 mm
+   link port (I/O), heard with earphones plugged into it through an adapter.
+   $60000C bit 6 disables the link controller, then $60000E bits 0-1 drive the wires.
+   The half-period is a busy loop counted in CPU cycles (12 MHz). */
+#define B89_LINKCTL (*(volatile unsigned char *)0x60000C)
+#define B89_LINKWIRES (*(volatile unsigned char *)0x60000E)
+
+#define B89_TONE_OVERHEAD 60             /* cycles of a half-period outside b89_spin */
+
+B89_FN void b89_spin(unsigned short n)         /* about 10 cycles per turn */
+{
+  if (n)
+    asm volatile ("subq.w #1,%0\n1:\tdbra %0,1b" : "+d" (n));
+}
+
+B89_FN void b89_tone(long freq, long ms)
+{
+  unsigned long periods;
+  unsigned char ctl;
+  unsigned short n, sr;
+  if (ms <= 0)
+    return;
+  if (freq < 20 || freq > 20000) {               /* silence */
+    b89_delay(ms);
+    return;
+  }
+  /* interrupts are off during the note (exact pitch): the length is counted in periods,
+     and the 256 Hz timer is moved on by the same time afterwards */
+  n = (unsigned short)((6000000L / freq - B89_TONE_OVERHEAD) / 10);   /* half-period */
+  periods = freq * ms / 1000;
+  ctl = B89_LINKCTL;
+  B89_LINKCTL = ctl | 0x40;                      /* direct control of the wires */
+  if (b89_gray) {
+    /* grayscale needs its interrupt: timed by the 256 Hz counter, and the loop is
+       shortened by the time the interrupts take (pitch within a few %) */
+    unsigned long end = b89_ticks + ms * 256 / 1000;
+    n = n * 5 / 6;                               /* the grayscale interrupt takes ~1/6 */
+    while ((long)(b89_ticks - end) < 0) {
+      B89_LINKWIRES = 3;
+      b89_spin(n);
+      B89_LINKWIRES = 0;
+      b89_spin(n);
+    }
+  } else {
+    sr = OSSetSR(0x0700);
+    for (; periods; periods--) {
+      B89_LINKWIRES = 3;
+      b89_spin(n);
+      B89_LINKWIRES = 0;
+      b89_spin(n);
+    }
+    OSSetSR(sr);
+    b89_ticks += ms * 256 / 1000;
+  }
+  B89_LINKWIRES = 0;
+  B89_LINKCTL = ctl;
+  b89_next_frame = b89_ticks;
+}
+
+/* PLAY "T120 O4 L4 C D E8 F#8 G2. R4 > C": notes A-G (# or + sharp, - flat) with an
+   optional length (1 whole, 2, 4 quarter, 8, 16, 32) and a dot (x 1.5); R or P rest;
+   O octave (0-7), > and < octave up/down, L default length, T tempo (quarter notes per
+   minute). */
+B89_FN void b89_play(const char *s)
+{
+  /* octave 4 in 1/10 Hz: C C# D D# E F F# G G# A A# B */
+  static const unsigned short f4[12] = {2616, 2772, 2937, 3111, 3296, 3492,
+                                        3700, 3920, 4153, 4400, 4662, 4939};
+  static const signed char pos[7] = {9, 11, 0, 2, 4, 5, 7};    /* A B C D E F G */
+  short octave = 4, len = 4, tempo = 120;
+  while (*s) {
+    char c = *s++;
+    short num = 0, has = 0, note = -1, dots = 0;
+    if (c >= 'a' && c <= 'z')
+      c -= 32;
+    if (c >= 'A' && c <= 'G') {
+      note = pos[c - 'A'];
+      if (*s == '#' || *s == '+') { note++; s++; }
+      else if (*s == '-') { note--; s++; }
+    } else if (c != 'R' && c != 'P' && c != 'O' && c != 'L' && c != 'T' && c != '>' && c != '<')
+      continue;                                  /* spaces and unknown characters */
+    while (*s >= '0' && *s <= '9') { num = num * 10 + (*s++ - '0'); has = 1; }
+    while (*s == '.') { dots++; s++; }
+    if (c == 'O') { if (has && num <= 7) octave = num; continue; }
+    if (c == '>') { if (octave < 7) octave++; continue; }
+    if (c == '<') { if (octave > 0) octave--; continue; }
+    if (c == 'L') { if (has && num >= 1 && num <= 64) len = num; continue; }
+    if (c == 'T') { if (has && num >= 20 && num <= 400) tempo = num; continue; }
+    {
+      short l = has && num >= 1 && num <= 64 ? num : len;
+      long ms = 240000L / ((long)tempo * l);     /* whole note = 4 beats */
+      if (dots) ms += ms / 2;
+      if (c == 'R' || c == 'P')                  /* rest */
+        b89_delay(ms);
+      else {
+        short o = octave;
+        long f;
+        if (note < 0) { note += 12; o--; }
+        if (note > 11) { note -= 12; o++; }
+        f = f4[note];
+        f = o >= 4 ? f << (o - 4) : f >> (4 - o);
+        b89_tone((f + 5) / 10, ms - ms / 8);    /* a short silence between notes */
+        b89_delay(ms / 8);
+      }
+    }
   }
 }
 

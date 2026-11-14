@@ -82,7 +82,7 @@ KEYWORDS = set("""
 AND AS BOX CALL CASE CIRCLE CLS CONST DELAY DIM DO ELSE ELSEIF END EXIT FILL FLIP FOR
 FUNCTION IF LINE LOCATE LOOP MOD NEXT NOT OR PRINT PSET RETURN SCREEN STEP SUB THEN TO
 UNTIL WAITFRAME WAITKEY WEND WHILE BUFFERED DIRECT SELECT IS TYPE INPUT INCLUDE COLOR GRAY4
-IMAGE SPRITE TILESET MAP MAPROW
+IMAGE SPRITE TILESET MAP MAPROW SOUND PLAY BEEP
 """.split())
 
 TYPES = {"INTEGER": "short", "LONG": "long", "BOOLEAN": "short", "FIXED": "fixed",
@@ -879,6 +879,17 @@ class Compiler:
                 p.end()
                 p.same_kind("str", ty, "MAPROW")
                 self.emit(line, f"b89_maprow({grid}, {rows}, {cols}, {r}, {e});")
+        elif word == "SOUND":
+            f, ms = p.args(2)
+            self.emit(line, f"b89_tone({f}, {ms});")
+        elif word == "BEEP":
+            p.end()
+            self.emit(line, "b89_tone(880, 80);")
+        elif word == "PLAY":
+            e, ty = p.expr()
+            p.end()
+            p.same_kind("str", ty, "PLAY")
+            self.emit(line, f"b89_play({e});")
         elif word == "COLOR":
             (c,) = p.args(1)
             self.emit(line, f"b89_color = {c};")

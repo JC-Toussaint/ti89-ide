@@ -1,4 +1,5 @@
-' Catch - Basic89 example of sprites (IMAGE, SPRITE, COLLIDE) in grayscale
+' Catch - Basic89 example of sprites (IMAGE, SPRITE, COLLIDE) in grayscale, and sound
+' (earphones on the link port, through a 2.5 mm adapter)
 ' LEFT / RIGHT: move the basket. Catch the stars, avoid the bombs.  ESC: quit
 
 IMAGE basket
@@ -59,12 +60,14 @@ DO
       SPRITE bomb, t(i).x, t(i).y
       IF COLLIDE(bomb, t(i).x, t(i).y, basket, bx, 90) THEN
         lives -= 1
+        SOUND 150, 60
         drop i
       END IF
     ELSE
       SPRITE star, t(i).x, t(i).y
       IF COLLIDE(star, t(i).x, t(i).y, basket, bx, 90) THEN
         score += 1
+        SOUND 1500, 15
         drop i
       END IF
     END IF
@@ -78,4 +81,5 @@ DO
 LOOP UNTIL lives = 0 OR KEYDOWN(KEY_ESC)
 LOCATE 6, 9
 PRINT "GAME OVER"
+IF lives = 0 THEN PLAY "T160 O4 L8 G F E D C2"
 WAITKEY

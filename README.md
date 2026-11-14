@@ -211,7 +211,15 @@ they have no transparent pixel (then empty cells are white): a full screen of 8x
 costs about 20 ms in black and white, 36 ms in grayscale. The tile under a point is
 simply `maze(y \ 8, x \ 8)`.
 
-Not yet: sound,
+Sound: the TI-89 has no speaker; the sound is a square wave on the 2.5 mm link port (I/O),
+heard with earphones through an adapter. `SOUND freq, ms` plays a note (frequency in Hz;
+0 is a silence), `PLAY "T120 O4 L8 C D E F# G2. R4 > C"` plays a tune (notes A-G with `#`
+or `-`, length 1-64 and a dot, `R` rest, `O` octave, `>` `<`, `L` default length, `T`
+tempo), `BEEP`. The program waits during the note. Interrupts are off during a note for
+an exact pitch (within 0.3 %), except in grayscale (within a few %, the grayscale needs
+them).
+
+Not yet:
 saving data. Comments start with `'` or `REM`; names and keywords ignore case.
 
 ## Example game
