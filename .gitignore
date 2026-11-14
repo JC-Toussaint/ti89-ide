@@ -18,6 +18,7 @@
 *.v2z
 *.dbg
 *.lst
+*.b89.c
 *.o
 *.so
 *.log

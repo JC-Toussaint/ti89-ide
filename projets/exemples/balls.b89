@@ -1,0 +1,70 @@
+' Bouncing balls - Basic89 example
+' LEFT / RIGHT: move the paddle    ENTER: add a ball    ESC: quit
+' Balls that touch the paddle bounce back up; the others are lost.
+
+CONST MAXB = 8
+DIM bx(MAXB) AS INTEGER, by(MAXB) AS INTEGER     ' positions, in 1/16 pixel
+DIM vx(MAXB) AS INTEGER, vy(MAXB) AS INTEGER     ' speeds
+DIM alive(MAXB) AS BOOLEAN
+DIM paddle AS INTEGER = 64
+DIM score AS LONG
+DIM i AS INTEGER
+DIM enter_was AS BOOLEAN
+
+SUB launch(k AS INTEGER)
+  bx(k) = (20 + RND(120)) * 16
+  by(k) = 12 * 16
+  vx(k) = RND(40) - 20
+  vy(k) = 0
+  alive(k) = TRUE
+END SUB
+
+FUNCTION count_alive() AS INTEGER
+  DIM n AS INTEGER, k AS INTEGER
+  FOR k = 0 TO MAXB
+    IF alive(k) THEN n += 1
+  NEXT
+  RETURN n
+END FUNCTION
+
+SCREEN BUFFERED
+launch 0
+DO
+  IF KEYDOWN(KEY_LEFT) AND paddle > 0 THEN paddle -= 3
+  IF KEYDOWN(KEY_RIGHT) AND paddle < 136 THEN paddle += 3
+  IF KEYDOWN(KEY_ENTER) AND NOT enter_was THEN
+    FOR i = 0 TO MAXB
+      IF NOT alive(i) THEN
+        launch i
+        EXIT FOR
+      END IF
+    NEXT
+  END IF
+  enter_was = KEYDOWN(KEY_ENTER)
+
+  CLS
+  FOR i = 0 TO MAXB
+    IF alive(i) THEN
+      vy(i) += 2                          ' gravity
+      bx(i) += vx(i)
+      by(i) += vy(i)
+      IF bx(i) < 2 * 16 OR bx(i) > 157 * 16 THEN vx(i) = -vx(i)
+      IF by(i) >= 88 * 16 THEN
+        IF bx(i) \ 16 >= paddle - 2 AND bx(i) \ 16 <= paddle + 26 THEN
+          by(i) = 88 * 16
+          vy(i) = -vy(i)
+          score += 1
+        ELSEIF by(i) > 100 * 16 THEN
+          alive(i) = FALSE
+        END IF
+      END IF
+      CIRCLE bx(i) \ 16, by(i) \ 16, 2
+    END IF
+  NEXT
+  BOX paddle, 91, paddle + 24, 93 FILL
+  LINE 0, 95, 159, 95
+  LOCATE 1, 1
+  PRINT "Score "; score; "  Balls "; count_alive()
+  FLIP
+  WAITFRAME 32
+LOOP UNTIL KEYDOWN(KEY_ESC)

@@ -67,6 +67,17 @@ class VarNode:
     error: bool = False
 
 
+def display_name(nm):
+    """Name shown for a C variable or function. Programs translated from Basic89 use
+    bv_ (variables) and bs_ (SUB/FUNCTION) prefixes, shown without them; the b89_ names
+    belong to the Basic89 runtime and its temporaries and are hidden (None)."""
+    if nm.startswith("b89_"):
+        return None
+    if nm.startswith(("bv_", "bs_")):
+        return nm[3:]
+    return nm[1:] if nm.startswith("__") else nm
+
+
 class VariableReader:
     def __init__(self, debugger):
         self.dbg = debugger
@@ -381,7 +392,9 @@ class VariableReader:
         def walk(scope, prefix):
             for d in scope.iter_children():
                 if d.tag in ("DW_TAG_formal_parameter", "DW_TAG_variable") and "DW_AT_name" in d.attributes:
-                    nm = d.attributes["DW_AT_name"].value.decode("latin-1")
+                    nm = display_name(d.attributes["DW_AT_name"].value.decode("latin-1"))
+                    if nm is None:
+                        continue
                     loc = d.attributes.get("DW_AT_location")
                     addr = reg = None
                     if loc is not None and loc.form.startswith("DW_FORM_block"):
@@ -394,7 +407,7 @@ class VariableReader:
                         walk(d, prefix + "{}/")
         walk(func, "")
         fname = func.attributes["DW_AT_name"].value.decode("latin-1")
-        return (fname[1:] if fname.startswith("__") else fname), out
+        return display_name(fname) or fname, out
 
     def globals(self):
         out = []
@@ -404,7 +417,9 @@ class VariableReader:
                     loc = d.attributes.get("DW_AT_location")
                     if loc is None or not loc.form.startswith("DW_FORM_block"):
                         continue
-                    nm = d.attributes["DW_AT_name"].value.decode("latin-1")
+                    nm = display_name(d.attributes["DW_AT_name"].value.decode("latin-1"))
+                    if nm is None:
+                        continue
                     addr, reg = self.eval_location(loc.value, None)
                     out.append(self.node(nm, self._type(d), addr, f"G/{nm}", reg))
         return out

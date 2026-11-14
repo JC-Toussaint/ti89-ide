@@ -24,7 +24,7 @@ ROM_PATH = os.environ.get("TI89_ROM", os.path.join(REPO_ROOT, "ROM", "ti89tv310.
 sys.path.insert(0, EMU_DIR)
 from ti89emu.session import Session, LoadError          # noqa: E402
 from ti89emu.debugger import Debugger, IDLE, STARTING, RUNNING, PAUSED   # noqa: E402
-from ti89emu.variables import VariableReader                            # noqa: E402
+from ti89emu.variables import VariableReader, display_name              # noqa: E402
 from ti89emu.asmvars import AsmVariableReader                           # noqa: E402
 from ti89emu import dbginfo                                             # noqa: E402
 from ti89emu.keyfeed import CHAR_MAP, KEYSYM_MAP          # noqa: E402
@@ -84,8 +84,25 @@ GAS_TEMPLATE = '| Assembly program for TI-89 Titanium (GNU as syntax)\n| Comment
 
 A68K_TEMPLATE = '; Assembly program for TI-89 Titanium (A68k syntax)\n; Comments start with ";". Registers are written d0, a7...\n; In _nostub mode the program starts at the first instruction of the file.\n\n        include "os.h"                  ; AMS ROM call numbers, ROM_CALL macro,\n                                        ; and the _nostub/_ti89 symbols\n        xdef    _nostub                 ; standalone program (no kernel)\n        xdef    _ti89                   ; target model (TI-89 / TI-89 Titanium)\n\nstart:\n        movem.l d3-d7/a2-a6,-(sp)       ; registers AMS expects to be preserved\n        lea     -3840(sp),sp            ; save the screen (240x128 bits = 3840 bytes)\n        movea.l sp,a1\n        lea     LCD_MEM,a0\n        move.w  #3840/4-1,d0\n\\save:  move.l  (a0)+,(a1)+\n        dbra    d0,\\save\n\n        ROM_CALL ScreenClear\n        move.w  #1,-(sp)                ; A_NORMAL\n        pea     message(pc)\n        move.w  #10,-(sp)               ; y\n        move.w  #10,-(sp)               ; x\n        ROM_CALL DrawStr                ; DrawStr(10, 10, message, A_NORMAL)\n        lea     10(sp),sp\n        ROM_CALL ngetchx                ; wait for a key\n\n        movea.l sp,a1                   ; restore the screen\n        lea     LCD_MEM,a0\n        move.w  #3840/4-1,d0\n\\rest:  move.l  (a1)+,(a0)+\n        dbra    d0,\\rest\n        lea     3840(sp),sp\n        movem.l (sp)+,d3-d7/a2-a6\n        rts\n\nmessage:\n        dc.b    "Hello from assembly!",0\n        even\n        end\n'
 
-TEMPLATES = {"c": (TEMPLATE, ".c"), "gas": (GAS_TEMPLATE, ".s"), "a68k": (A68K_TEMPLATE, ".asm")}
-LANG_NAMES = {"c": "C", "gas": "assembly (GNU as)", "a68k": "assembly (A68k)"}
+BASIC_TEMPLATE = """' Basic89 program for TI-89 Titanium
+' LEFT / RIGHT: move the square    ESC: quit
+
+DIM x AS INTEGER = 72
+
+SCREEN BUFFERED
+DO
+  IF KEYDOWN(KEY_LEFT) AND x > 0 THEN x -= 2
+  IF KEYDOWN(KEY_RIGHT) AND x < 144 THEN x += 2
+  CLS
+  PRINT "Hello from Basic89!"
+  BOX x, 50, x + 15, 65 FILL
+  FLIP
+  WAITFRAME 32
+LOOP UNTIL KEYDOWN(KEY_ESC)
+"""
+
+TEMPLATES = {"basic": (BASIC_TEMPLATE, ".b89"), "c": (TEMPLATE, ".c"), "gas": (GAS_TEMPLATE, ".s"), "a68k": (A68K_TEMPLATE, ".asm")}
+LANG_NAMES = {"basic": "Basic89", "c": "C", "gas": "assembly (GNU as)", "a68k": "assembly (A68k)"}
 
 
 # Noms déjà utilisés par AMS (commandes et fonctions) : un programme portant ce nom
@@ -121,7 +138,7 @@ OPT_LEVELS = {
 
 def language_of(path):
     ext = os.path.splitext(path or "")[1].lower()
-    return {".s": "gas", ".asm": "a68k"}.get(ext, "c")
+    return {".s": "gas", ".asm": "a68k", ".b89": "basic"}.get(ext, "c")
 
 
 UI = {"bg": "#2b2d31", "panel": "#232428", "fg": "#d4d4d4", "muted": "#8b8f98",
@@ -394,6 +411,7 @@ class IdeApp:
         f.add_command(label="New C Program", accelerator="Ctrl+N", command=self.new_file)
         f.add_command(label="New Assembly Program (GNU as)", command=lambda: self.new_file("gas"))
         f.add_command(label="New Assembly Program (A68k)", command=lambda: self.new_file("a68k"))
+        f.add_command(label="New Basic89 Program", command=lambda: self.new_file("basic"))
         f.add_command(label="Open…", accelerator="Ctrl+O", command=self.open_dialog)
         f.add_command(label="Save", accelerator="Ctrl+S", command=self.save)
         f.add_command(label="Save As…", accelerator="Ctrl+Shift+S", command=self.save_as)
@@ -488,8 +506,10 @@ class IdeApp:
         if not self._confirm_discard():
             return
         p = filedialog.askopenfilename(initialdir=self._dir(), title="Open a program",
-                                       filetypes=[("Sources (C, assembly)", "*.c *.h *.s *.asm"), ("C source", "*.c *.h"),
+                                       filetypes=[("Sources (C, assembly, Basic89)", "*.c *.h *.s *.asm *.b89"),
+                                                  ("C source", "*.c *.h"),
                                                   ("GNU as assembly", "*.s"), ("A68k assembly", "*.asm"),
+                                                  ("Basic89", "*.b89"),
                                                   ("All files", "*")])
         if p:
             self.open_file(p)
@@ -884,7 +904,7 @@ class IdeApp:
                 where = f" — after label {lbl}" if lbl else ""
             else:
                 fn = d.info.function_for(d.offset())
-                fn = fn[1:] if fn and fn.startswith("__") else fn
+                fn = (display_name(fn) or fn) if fn else fn
                 where = f" — in {fn}()" if fn else ""
             self._set_status(f"‖ Paused at line {line} ({d.stop_reason}){where}", "#fbbf24")
         else:

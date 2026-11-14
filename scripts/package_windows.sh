@@ -32,14 +32,16 @@ cmd.exe /c "cd /d $WBUILD && $VENV\\Scripts\\python.exe -m PyInstaller --noconfi
   --name ti89-ide --paths ide89 --paths emu89 \
   --add-data emu89\\core\\ti89core.dll;core \
   --add-data emu89\\ti89emu\\stubs\\loadvar.bin;ti89emu\\stubs \
+  --add-data ide89\\basic89\\b89rt.h;basic89 \
   ide89\\ide89.py" | tr -d '\r' | tail -3
 
 echo "=== package"
 PKG="$BUILD/dist/ti89-ide"
 cp -r "$ROOT/gcc4ti-win" "$PKG/gcc4ti"
 mkdir -p "$PKG/projets/exemples" "$PKG/ROM"
-cp "$ROOT"/projets/exemples/*.c "$ROOT"/projets/exemples/*.s "$ROOT"/projets/exemples/*.asm \
+cp "$ROOT"/projets/exemples/*.c "$ROOT"/projets/exemples/*.s "$ROOT"/projets/exemples/*.asm "$ROOT"/projets/exemples/*.b89 \
    "$PKG/projets/exemples/"
+rm -f "$PKG"/projets/exemples/*.b89.c        # C generated from the Basic89 examples
 cp "$ROOT/LICENSE" "$PKG/"
 # GCC4TI (GCC, binutils, TIGCC library) is free software under the GNU GPL: its license
 # and where to get the corresponding sources go with the binaries.

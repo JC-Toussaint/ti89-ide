@@ -1,0 +1,102 @@
+' Rotating 3D cube - Basic89 version of cube.c (same algorithm, to compare speeds)
+' F1: hidden faces / wireframe    ESC: quit
+
+CONST SIZE = 22 * 64          ' half edge, in 1/64 pixel
+CONST DIST = 150 * 64
+CONST FOV = 150
+
+DIM sx(7) AS INTEGER, sy(7) AS INTEGER
+DIM face(23) AS INTEGER       ' 6 faces x 4 vertices, counterclockwise seen from outside
+DIM ax AS INTEGER, ay AS INTEGER, az AS INTEGER
+DIM hidden AS BOOLEAN = TRUE
+DIM f1_was AS BOOLEAN
+DIM frames AS INTEGER, fps AS INTEGER
+DIM last AS LONG
+DIM f AS INTEGER
+
+SUB set_face(n AS INTEGER, a AS INTEGER, b AS INTEGER, c AS INTEGER, d AS INTEGER)
+  face(n * 4) = a
+  face(n * 4 + 1) = b
+  face(n * 4 + 2) = c
+  face(n * 4 + 3) = d
+END SUB
+
+' product of two numbers in 1/16384 units
+FUNCTION q(a AS LONG, b AS LONG) AS LONG
+  RETURN (a * b) \ 16384
+END FUNCTION
+
+SUB transform()
+  DIM cx AS LONG, sxa AS LONG, cy AS LONG, sya AS LONG, cz AS LONG, sza AS LONG
+  DIM m00 AS LONG, m01 AS LONG, m02 AS LONG, m10 AS LONG, m11 AS LONG, m12 AS LONG
+  DIM m20 AS LONG, m21 AS LONG, m22 AS LONG
+  DIM i AS INTEGER, x AS LONG, y AS LONG, z AS LONG, rx AS LONG, ry AS LONG, rz AS LONG
+  cx = ICOS(ax) : sxa = ISIN(ax)
+  cy = ICOS(ay) : sya = ISIN(ay)
+  cz = ICOS(az) : sza = ISIN(az)
+  m00 = q(cy, cz)
+  m01 = q(q(sxa, sya), cz) - q(cx, sza)
+  m02 = q(q(cx, sya), cz) + q(sxa, sza)
+  m10 = q(cy, sza)
+  m11 = q(q(sxa, sya), sza) + q(cx, cz)
+  m12 = q(q(cx, sya), sza) - q(sxa, cz)
+  m20 = -sya
+  m21 = q(sxa, cy)
+  m22 = q(cx, cy)
+  FOR i = 0 TO 7
+    IF i MOD 2 = 1 THEN x = SIZE ELSE x = -SIZE
+    IF (i \ 2) MOD 2 = 1 THEN y = SIZE ELSE y = -SIZE
+    IF i \ 4 = 1 THEN z = SIZE ELSE z = -SIZE
+    rx = (m00 * x + m01 * y + m02 * z) \ 16384
+    ry = (m10 * x + m11 * y + m12 * z) \ 16384
+    rz = (m20 * x + m21 * y + m22 * z) \ 16384
+    sx(i) = 80 + rx * FOV \ (rz + DIST)
+    sy(i) = 50 - ry * FOV \ (rz + DIST)
+  NEXT
+END SUB
+
+SUB edge(a AS INTEGER, b AS INTEGER)
+  LINE sx(a), sy(a), sx(b), sy(b)
+END SUB
+
+set_face 0, 0, 4, 6, 2
+set_face 1, 1, 3, 7, 5
+set_face 2, 0, 1, 5, 4
+set_face 3, 2, 6, 7, 3
+set_face 4, 0, 2, 3, 1
+set_face 5, 4, 5, 7, 6
+
+SCREEN BUFFERED
+last = TICKS
+DO
+  IF KEYDOWN(KEY_F1) AND NOT f1_was THEN hidden = NOT hidden
+  f1_was = KEYDOWN(KEY_F1)
+  IF TICKS - last >= 256 THEN
+    fps = frames : frames = 0 : last = TICKS
+  END IF
+
+  CLS
+  transform
+  IF hidden THEN
+    FOR f = 0 TO 5
+      DIM a AS INTEGER, b AS INTEGER, c AS INTEGER, d AS INTEGER, cross AS LONG
+      a = face(f * 4) : b = face(f * 4 + 1) : c = face(f * 4 + 2) : d = face(f * 4 + 3)
+      cross = (sx(b) - sx(a)) * (sy(c) - sy(a)) - (sy(b) - sy(a)) * (sx(c) - sx(a))
+      IF cross >= 0 THEN
+        edge a, b : edge b, c : edge c, d : edge d, a
+      END IF
+    NEXT
+  ELSE
+    DIM v AS INTEGER
+    FOR v = 0 TO 7
+      IF v MOD 2 = 0 THEN edge v, v + 1
+      IF (v \ 2) MOD 2 = 0 THEN edge v, v + 2
+      IF v < 4 THEN edge v, v + 4
+    NEXT
+  END IF
+  LOCATE 1, 1
+  PRINT fps; " fps"
+  FLIP
+  frames += 1
+  ax = (ax + 2) MOD 256 : ay = (ay + 3) MOD 256 : az = (az + 1) MOD 256
+LOOP UNTIL KEYDOWN(KEY_ESC)

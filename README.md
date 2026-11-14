@@ -146,6 +146,41 @@ Once, with the calculator plugged in and turned on:
 
 The IDE then attaches the calculator to WSL by itself (`usbipd attach`) when you send a program.
 
+## Basic89 (prototype)
+
+**Basic89** is a structured BASIC in the spirit of QuickBASIC, made for the TI-89 Titanium.
+A `.b89` program is translated to C (`program.b89.c`) and compiled by GCC4TI: it runs at
+the speed of a C program. Every generated statement carries a `#line` directive, so the
+error messages **and the debugger** (breakpoints, stepping, variables) work on the lines of
+the Basic program. *File > New Basic89 Program* creates a small example; F5 runs, F6 debugs.
+Examples: `projets/exemples/balls.b89`, `projets/exemples/cube2.b89` (the 3D cube of `cube.c`).
+
+```basic
+DIM x AS INTEGER = 72
+SCREEN BUFFERED
+DO
+  IF KEYDOWN(KEY_LEFT) AND x > 0 THEN x -= 2
+  IF KEYDOWN(KEY_RIGHT) AND x < 144 THEN x += 2
+  CLS
+  BOX x, 50, x + 15, 65 FILL
+  FLIP
+  WAITFRAME 32
+LOOP UNTIL KEYDOWN(KEY_ESC)
+```
+
+| | |
+|---|---|
+| Types | `INTEGER` (16 bits), `LONG` (32 bits), `BOOLEAN`; arrays `DIM a(10) AS INTEGER` (indices 0 to 10). Every variable must be declared with `DIM`; `DIM` sets it to 0 unless `= value` is given |
+| Declarations | `DIM`, `CONST`, `SUB name(p AS INTEGER, ...)` ... `END SUB`, `FUNCTION name(...) AS LONG` ... `RETURN value` ... `END FUNCTION`. A `DIM` outside a SUB/FUNCTION is a global variable |
+| Control | `IF ... THEN` / `ELSEIF` / `ELSE` / `END IF` (or on one line), `FOR ... TO ... STEP` / `NEXT`, `DO [WHILE\|UNTIL]` / `LOOP [WHILE\|UNTIL]`, `WHILE` / `WEND`, `EXIT FOR\|DO\|WHILE\|SUB\|FUNCTION`, `END`; statements can be separated by `:` |
+| Operators | `+ - * / \ MOD` (integer division), `= <> < > <= >=`, `AND OR NOT`, `x += 1`, `-=`, `*=`; numbers in decimal, `&H1F`, `&B101` |
+| Screen | `CLS`, `PRINT a; "text"; b`, `LOCATE row, col`, `PSET x, y`, `LINE x1, y1, x2, y2`, `BOX x1, y1, x2, y2 [FILL]`, `CIRCLE x, y, r` (optional colour `BLACK`, `WHITE`, `XOR`; everything is clipped to the screen), `SCREEN BUFFERED` + `FLIP` (draw in a hidden screen, then show it: no flicker) |
+| Time, keys | `WAITFRAME fps` (steady frame rate), `DELAY ms`, `TICKS` (256 Hz counter), `KEYDOWN(KEY_LEFT)` (keys held, several at once: `KEY_UP`, `KEY_ENTER`, `KEY_ESC`, `KEY_F1`...), `GETKEY()`, `WAITKEY` |
+| Functions | `RND(n)` (0 to n-1), `ABS`, `MIN`, `MAX`, `ISIN(angle)`, `ICOS(angle)` (angle in 1/256 of a turn, result in 1/16384) |
+
+Not yet: strings variables, `SELECT CASE`, records (`TYPE`), grayscale, sprites, sound,
+saving data. Comments start with `'` or `REM`; names and keywords ignore case.
+
 ## Example game
 
 ![Meteor Dodge](docs/game.png)

@@ -4,6 +4,8 @@ import re
 import subprocess
 from dataclasses import dataclass, field
 
+from basic89.compiler import compile_source, CompileError, RUNTIME_DIR
+
 # Racine du dépôt : .../ide89/ide/build.py -> trois niveaux au-dessus
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 GCC4TI = os.environ.get("TIGCC", os.path.join(REPO_ROOT, "gcc4ti"))
@@ -71,7 +73,7 @@ def parse_messages(output, source_name):
         if re.match(r"^End of assembly - \d+ errors? (was|were) found", line):
             continue
         m = _MSG_RE.match(line)
-        if m and m.group("file").strip().endswith((".c", ".h", ".s", ".asm")):
+        if m and m.group("file").strip().endswith((".c", ".h", ".s", ".asm", ".b89")):
             sev = (m.group("sev") or "").lower() or None
             msgs.append(Message(_SEV[sev], int(m.group("line")),
                                 m.group("msg").strip(), m.group("file").strip()))
@@ -100,11 +102,27 @@ def build(source_path, optimize="-O2", debug_build=False):
         except FileNotFoundError:
             pass
     cmd = [tool("tigcc"), "-g", optimize, C_STANDARD, "-Wall"]
+    source_file = os.path.basename(source_path)
+    if source_path.lower().endswith(".b89"):
+        # Basic89: translated to C (program.b89.c), whose #line directives point back to
+        # the lines of the .b89 for the error messages and the debugger
+        try:
+            with open(source_path, encoding="utf-8") as f:
+                code = compile_source(f.read(), source_path)
+        except CompileError as e:
+            return BuildResult(False, [Message("error", e.line, e.msg, source_file)],
+                               f"{source_file}:{e.line}: error: {e.msg}")
+        except (OSError, UnicodeDecodeError) as e:
+            return BuildResult(False, [Message("error", 0, str(e))])
+        source_file += ".c"
+        with open(os.path.join(src_dir, source_file), "w", encoding="latin-1", newline="\n") as f:
+            f.write(code)
+        cmd.append("-I" + RUNTIME_DIR)
     if debug_build:
         # Variables globales non initialisées rangées dans le programme (et non dans un
         # bloc BSS créé au lancement) : le débogueur les trouve à leur adresse DWARF.
         cmd.append("-mno-bss")
-    cmd += [os.path.basename(source_path), "-o", name]
+    cmd += [source_file, "-o", name]
     try:
         p = subprocess.run(cmd, cwd=src_dir, env=env, capture_output=True, text=True,
                            timeout=120, **_NO_WINDOW)

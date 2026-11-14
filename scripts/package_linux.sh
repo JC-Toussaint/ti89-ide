@@ -33,6 +33,7 @@ cd "$BUILD"
   --hidden-import PIL._tkinter_finder \
   --add-data emu89/core/libti89core.so:core \
   --add-data emu89/ti89emu/stubs/loadvar.bin:ti89emu/stubs \
+  --add-data ide89/basic89/b89rt.h:basic89 \
   ide89/ide89.py
 
 echo "=== package"
@@ -40,8 +41,9 @@ PKG="$BUILD/dist/ti89-ide"
 mkdir -p "$PKG/gcc4ti"
 cp -r "$ROOT/gcc4ti/bin" "$ROOT/gcc4ti/include" "$ROOT/gcc4ti/lib" "$PKG/gcc4ti/"
 mkdir -p "$PKG/projets/exemples" "$PKG/ROM"
-cp "$ROOT"/projets/exemples/*.c "$ROOT"/projets/exemples/*.s "$ROOT"/projets/exemples/*.asm \
+cp "$ROOT"/projets/exemples/*.c "$ROOT"/projets/exemples/*.s "$ROOT"/projets/exemples/*.asm "$ROOT"/projets/exemples/*.b89 \
    "$PKG/projets/exemples/"
+rm -f "$PKG"/projets/exemples/*.b89.c        # C generated from the Basic89 examples
 cp "$ROOT/LICENSE" "$PKG/"
 # GCC4TI is free software under the GNU GPL: its license and where to get the sources.
 cp "$ROOT/gcc4ti-src/gcc4ti/trunk/tigcc-linux/COPYING" "$PKG/gcc4ti/COPYING"

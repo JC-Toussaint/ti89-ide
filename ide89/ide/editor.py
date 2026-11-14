@@ -53,6 +53,18 @@ _ASM_DIRECTIVES = {"include", "xdef", "xref", "equ", "set", "dc", "dc.b", "dc.w"
                    "rept", "endr", "incbin", "opt", "public", "cnop", "rom_call", "rom_call2"}
 
 
+# --- Basic89 (mots-clés insensibles à la casse, commentaires « ' » ou REM)
+_BAS_TOKEN_RE = re.compile(
+    r"(?P<comment>'[^\n]*|\bREM\b[^\n]*)"
+    r"|(?P<string>\"[^\"\n]*\"?)"
+    r"|(?P<number>&[Hh][0-9A-Fa-f]+|&[Bb][01]+|\b\d+\b)"
+    r"|(?P<word>\b[A-Za-z_]\w*\b)",
+    re.I)
+_BAS_TYPES = {"INTEGER", "LONG", "BOOLEAN"}
+_BAS_BUILTINS = {"KEYDOWN", "RND", "ABS", "MIN", "MAX", "ISIN", "ICOS", "GETKEY", "TICKS",
+                 "TRUE", "FALSE", "BLACK", "WHITE", "XOR"}
+
+
 class CodeEditor(tk.Frame):
     """Zone de texte avec marge (numéros de ligne + points d'arrêt)."""
 
@@ -243,6 +255,19 @@ class CodeEditor(tk.Frame):
         t.tag_raise("comment")
         t.tag_raise("sel")
 
+    def _highlight_basic(self, content):
+        from basic89.compiler import KEYWORDS as bas_keywords
+        t = self.text
+        for m in _BAS_TOKEN_RE.finditer(content):
+            kind = m.lastgroup
+            if kind == "word":
+                w = m.group().upper()
+                kind = ("keyword" if w in bas_keywords else "type" if w in _BAS_TYPES
+                        else "label" if w in _BAS_BUILTINS or w.startswith("KEY_") else None)
+                if not kind:
+                    continue
+            t.tag_add(kind, f"1.0+{m.start()}c", f"1.0+{m.end()}c")
+
     def highlight(self):
         self._hl_job = None
         t = self.text
@@ -252,6 +277,8 @@ class CodeEditor(tk.Frame):
             t.tag_remove(tag, "1.0", "end")
         if self.language in ("gas", "a68k"):
             return self._highlight_asm(content)
+        if self.language == "basic":
+            return self._highlight_basic(content)
         for m in _TOKEN_RE.finditer(content):
             kind = m.lastgroup
             if kind == "word":
