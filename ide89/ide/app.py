@@ -14,6 +14,7 @@ from .editor import CodeEditor, THEME
 from . import realcalc
 from .memview import MemoryView
 from .regview import RegisterView
+from . import basichelp
 from .icons import make_icon
 from PIL import ImageTk
 
@@ -346,6 +347,24 @@ class IdeApp:
         bottom.add(df, text="Disassembly")
         self.memview = MemoryView(bottom, self)
         bottom.add(self.memview, text="Memory")
+        hf = tk.Frame(bottom, bg=UI["panel"])
+        self.help_text = tk.Text(hf, bg=UI["panel"], fg=UI["fg"], font=(SANS, 10), relief="flat",
+                                 height=8, wrap="word", state="disabled", padx=8, pady=4,
+                                 cursor="arrow")
+        hsb = ttk.Scrollbar(hf, orient="vertical", command=self.help_text.yview)
+        self.help_text.configure(yscrollcommand=hsb.set)
+        hsb.pack(side="right", fill="y")
+        self.help_text.pack(fill="both", expand=True)
+        ht = self.help_text
+        ht.tag_configure("title", font=(SANS, 12, "bold"), foreground="#dcdcaa")
+        ht.tag_configure("code", font=(MONO, 10), foreground="#9cdcfe", background="#1e1f22",
+                         lmargin1=12, lmargin2=12)
+        ht.tag_configure("label", foreground=UI["muted"])
+        ht.tag_configure("link", foreground="#569cd6", underline=True)
+        ht.tag_bind("link", "<Enter>", lambda e: ht.configure(cursor="hand2"))
+        ht.tag_bind("link", "<Leave>", lambda e: ht.configure(cursor="arrow"))
+        ht.tag_bind("link", "<Button-1>", self._help_link)
+        bottom.add(hf, text="Help")
         self.bottom = bottom
         bottom.bind("<<NotebookTabChanged>>", self._refresh_current_tab)
         self.mem_tick = 0.0
@@ -401,6 +420,10 @@ class IdeApp:
         self.file_label = tk.Label(status, text="", bg="#18191c", fg="#5d616b",
                                    font=(SANS, 9), padx=8)
         self.file_label.pack(side="right")
+        # Basic89: syntax of the keyword under the cursor (F1: full help)
+        self.hint_label = tk.Label(status, text="", bg="#18191c", fg="#dcdcaa",
+                                   font=(MONO, 9), padx=8)
+        self.hint_label.pack(side="right")
         main.pack(fill="both", expand=True)   # après la barre d'état, pour qu'elle reste visible
 
     def _build_menu(self):
@@ -445,11 +468,16 @@ class IdeApp:
                       command=lambda: self.toggle_breakpoint(
                           int(self.editor.text.index("insert").split(".")[0])))
         bar.add_cascade(label="Debug", menu=d)
+        h = tk.Menu(bar, **mopts)
+        h.add_command(label="Basic89 Help", accelerator="F1", command=self.show_help)
+        h.add_command(label="Basic89 Index", command=lambda: self._show_help_entry(None))
+        bar.add_cascade(label="Help", menu=h)
         self.root.configure(menu=bar)
 
     def _bind_keys(self):
         r = self.root
         r.bind("<F7>", lambda e: self.compile())
+        r.bind("<F1>", self.show_help)
         r.bind("<F5>", lambda e: self.dbg_resume("continue") if self._paused() else self.run_program())
         r.bind("<F6>", lambda e: self.debug_program())
         r.bind("<F9>", lambda e: self.toggle_breakpoint(int(self.editor.text.index("insert").split(".")[0])))
@@ -580,6 +608,64 @@ class IdeApp:
 
     def _on_cursor(self, line, col):
         self.cursor_label.configure(text=f"Ln {line}, Col {col}")
+        hint = ""
+        if self.editor.language == "basic":
+            found = basichelp.lookup(self._word_at_cursor())
+            if found:
+                hint = found[1][0].splitlines()[0]
+                hint = hint if len(hint) <= 60 else hint[:57] + "..."
+        self.hint_label.configure(text=hint)
+
+    # ------------------------------------------------------------ aide Basic89
+    def _word_at_cursor(self):
+        t = self.editor.text
+        line = t.get("insert linestart", "insert lineend")
+        col = int(t.index("insert").split(".")[1])
+        isw = lambda c: c.isalnum() or c in "_$"
+        a = col
+        while a > 0 and isw(line[a - 1]):
+            a -= 1
+        b = col
+        while b < len(line) and isw(line[b]):
+            b += 1
+        return line[a:b]
+
+    def show_help(self, event=None):
+        """F1: help of the Basic89 keyword under the cursor (or the index)."""
+        if self.editor.language != "basic":
+            self._set_status("Help (F1) is available for Basic89 programs (File > New Basic89 Program).")
+            return "break"
+        found = basichelp.lookup(self._word_at_cursor())
+        self._show_help_entry(found[0] if found else None)
+        return "break"
+
+    def _show_help_entry(self, name):
+        ht = self.help_text
+        ht.configure(state="normal")
+        ht.delete("1.0", "end")
+        if name:
+            syntax, desc, example = basichelp.HELP[name]
+            ht.insert("end", name + "\n", "title")
+            ht.insert("end", syntax + "\n", "code")
+            ht.insert("end", "\n" + desc + "\n\n")
+            ht.insert("end", "Example\n", "label")
+            ht.insert("end", example + "\n", "code")
+            ht.insert("end", "\n")
+        else:
+            ht.insert("end", "Basic89 help\n", "title")
+            ht.insert("end", "Put the cursor on a keyword and press F1. All the entries:\n\n")
+        ht.insert("end", "Index: ", "label")
+        for k in sorted(basichelp.HELP):
+            ht.insert("end", k, ("link", "help:" + k))
+            ht.insert("end", "  ")
+        ht.configure(state="disabled")
+        ht.yview_moveto(0)
+        self.bottom.select(self.bottom.index("end") - 1)
+
+    def _help_link(self, event):
+        for tag in self.help_text.tag_names(f"@{event.x},{event.y}"):
+            if tag.startswith("help:"):
+                self._show_help_entry(tag[5:])
 
     def quit(self):
         if self._confirm_discard():
