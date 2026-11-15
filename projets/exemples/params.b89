@@ -1,0 +1,85 @@
+' Parameters - Basic89 example of BYREF, BYVAL and array parameters
+' A small table of scores: sorted, with statistics, then a name is formatted.
+'
+'   no keyword : numbers by value (a copy), STRING read only, TYPE by reference
+'   BYREF      : the SUB works on the caller's variable (it can change it)
+'   BYVAL      : the SUB works on a copy (a STRING can then be changed)
+'   a()        : an array of any size, always by reference; UBOUND(a) is its last index
+
+TYPE Player
+  name AS STRING * 8
+  score AS INTEGER
+END TYPE
+
+DIM team(4) AS Player
+DIM lo AS INTEGER, hi AS INTEGER, mean AS FIXED
+DIM a AS INTEGER = 1, b AS INTEGER = 2
+DIM title AS STRING * 20 = "results"
+DIM i AS INTEGER
+
+' BYREF: exchanges the two variables of the caller
+SUB swap(BYREF x AS INTEGER, BYREF y AS INTEGER)
+  DIM t AS INTEGER
+  t = x : x = y : y = t
+END SUB
+
+' Array parameter: sorts the players by score (the caller's array is sorted)
+SUB sort(p() AS Player)
+  DIM i AS INTEGER, j AS INTEGER, t AS Player
+  FOR i = 0 TO UBOUND(p) - 1
+    FOR j = i + 1 TO UBOUND(p)
+      IF p(j).score > p(i).score THEN
+        t = p(i) : p(i) = p(j) : p(j) = t
+      END IF
+    NEXT
+  NEXT
+END SUB
+
+' Several results at once: lowest, highest and mean score, given back through BYREF
+SUB stats(p() AS Player, BYREF low AS INTEGER, BYREF high AS INTEGER, BYREF avg AS FIXED)
+  DIM i AS INTEGER, sum AS LONG
+  low = p(0).score : high = p(0).score
+  FOR i = 0 TO UBOUND(p)
+    low = MIN(low, p(i).score)
+    high = MAX(high, p(i).score)
+    sum += p(i).score
+  NEXT
+  avg = sum / (UBOUND(p) + 1.0)
+END SUB
+
+' BYVAL STRING: n is a copy, it can be changed without changing the caller's text
+FUNCTION label$(BYVAL n AS STRING, rank AS INTEGER) AS STRING
+  n = UCASE$(LEFT$(n, 1)) + MID$(n, 2)
+  RETURN STR$(rank) + ". " + n
+END FUNCTION
+
+' BYREF STRING: changes the caller's text (cut to its maximum length)
+SUB frame(BYREF s AS STRING)
+  s = "[" + UCASE$(s) + "]"
+END SUB
+
+' BYVAL TYPE: works on a copy of the player (the bonus is not kept)
+FUNCTION withbonus(BYVAL p AS Player) AS INTEGER
+  p.score += 10
+  RETURN p.score
+END FUNCTION
+
+team(0).name = "zoe" : team(0).score = 42
+team(1).name = "max" : team(1).score = 77
+team(2).name = "lea" : team(2).score = 15
+team(3).name = "tom" : team(3).score = 63
+team(4).name = "ana" : team(4).score = 77
+
+swap a, b
+PRINT "swap: a="; a; " b="; b
+sort team
+stats team, lo, hi, mean
+frame title
+PRINT title
+FOR i = 0 TO UBOUND(team)
+  PRINT label$(team(i).name, i + 1); " "; team(i).score
+NEXT
+PRINT "low "; lo; " high "; hi; " mean "; mean
+PRINT "with bonus: "; withbonus(team(0)); " kept: "; team(0).score
+PRINT "name unchanged: "; team(0).name
+WAITKEY

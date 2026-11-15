@@ -154,7 +154,7 @@ the speed of a C program. Every generated statement carries a `#line` directive,
 error messages **and the debugger** (breakpoints, stepping, variables) work on the lines of
 the Basic program. *File > New Basic89 Program* creates a small example; F5 runs, F6 debugs.
 Examples: `projets/exemples/balls.b89`, `projets/exemples/orbit.b89` (FIXED numbers, grayscale),
-`projets/exemples/guess.b89` (STRING, INPUT), `projets/exemples/catch.b89` (sprites, sound, saved best score), `projets/exemples/maze.b89` (tile map, scrolling),
+`projets/exemples/guess.b89` (STRING, INPUT), `projets/exemples/catch.b89` (sprites, sound, saved best score), `projets/exemples/maze.b89` (tile map, scrolling), `projets/exemples/params.b89` (BYREF, BYVAL, array parameters),
 `projets/exemples/cube2.b89` (the 3D cube of `cube.c`).
 
 ```basic
