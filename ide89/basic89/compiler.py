@@ -82,6 +82,7 @@ KEYWORDS = set("""
 AND AS BOX CALL CASE CIRCLE CLS CONST DELAY DIM DO ELSE ELSEIF END EXIT FILL FLIP FOR
 FUNCTION IF LINE LOCATE LOOP MOD NEXT NOT OR PRINT PSET RETURN SCREEN STEP SUB THEN TO
 UNTIL WAITFRAME WAITKEY WEND WHILE BUFFERED DIRECT SELECT IS TYPE INPUT INCLUDE COLOR GRAY4
+BYVAL BYREF
 IMAGE SPRITE TILESET MAP MAPROW SOUND PLAY BEEP SAVE LOAD KILL
 """.split())
 
@@ -149,6 +150,15 @@ class Var:
         self.byref = byref          # record parameter: passed by address
         self.cap = cap              # STRING: maximum length
         self.readonly = False       # STRING parameter
+        self.sizes = None           # array parameter: C names of its sizes (b89_d1_x...)
+        self.strsize = None         # array parameter of STRINGs: C name of the element size
+
+    def size_exprs(self):
+        """Sizes of the dimensions of an array, as C expressions."""
+        return self.sizes if self.sizes else [str(d + 1) for d in self.dims]
+
+    def str_size(self):
+        return self.strsize if self.strsize else str(self.cap + 1)
 
     @property
     def ref(self):
@@ -198,6 +208,16 @@ class Record:
     def __init__(self, name, line, display):
         self.name, self.line, self.display = name, line, display
         self.fields = {}            # name -> Var
+
+
+class Param:
+    """A parameter of a SUB/FUNCTION. mode: "val" (a copy), "ro" (STRING without
+    keyword: read only, not copied), "copy" (BYVAL STRING: a local copy), "ref" (BYREF,
+    and TYPE without keyword). rank > 0: an array, always by reference."""
+
+    def __init__(self, name, ty, mode, rank=0):
+        self.name, self.ty, self.mode, self.rank = name, ty, mode, rank
+        self.key = name.lower()
 
 
 class Proc:
@@ -289,7 +309,7 @@ class Compiler:
                                      "(LEFT$...); declare text with DIM name AS STRING")
         if up in KEYWORDS or up in TYPES or up in BUILTINS or up in COLORS or up in STR_FUNCS or \
                 up in ("TRUE", "FALSE", "KEYDOWN", "INT", "ROUND", "SQR", "SIN", "COS",
-                       "WIDTH", "HEIGHT", "COLLIDE", "EXISTS") or \
+                       "WIDTH", "HEIGHT", "COLLIDE", "EXISTS", "UBOUND", "LBOUND") or \
                 up.startswith("KEY_"):
             raise CompileError(line, f"'{name}' is a reserved word")
         key = name.lower()
@@ -516,9 +536,30 @@ class Compiler:
             return f"char bv_{v.name}{dims}[{v.cap + 1}]"
         return f"{self.ctype(v.ctype)} bv_{v.name}{dims}"
 
+    def param_c(self, pa):
+        n, ty = pa.key, pa.ty
+        if pa.rank:
+            # pointer to an array whose sizes are passed before it (C99 variable-length array)
+            dims = [f"b89_d{k}_{n}" for k in range(1, pa.rank + 1)]
+            out = [f"short {d}" for d in dims]
+            if ty == "str":
+                out.append(f"short b89_s_{n}")
+                dims.append(f"b89_s_{n}")
+                elem = "char"
+            else:
+                elem = self.ctype(ty)
+            return ", ".join(out + [f"{elem} (*bv_{n})" + "".join(f"[{d}]" for d in dims)])
+        if pa.mode == "ref":
+            if ty == "str":
+                return f"short b89_s_{n}, char (*bv_{n})[b89_s_{n}]"
+            return f"{self.ctype(ty)} *bv_{n}"
+        if pa.mode == "copy":
+            return f"const char *b89_in_{n}"
+        c = self.ctype(ty)
+        return f"{c}{'' if c.endswith('*') else ' '}bv_{n}"
+
     def proc_header(self, p):
-        args = ", ".join(f"{self.ctype(t)}{' *' if is_rec(t) else '' if t == 'str' else ' '}bv_{n.lower()}"
-                         for n, t in p.params) or "void"
+        args = ", ".join(self.param_c(pa) for pa in p.params) or "void"
         ret = self.ctype(p.ret) if p.ret else "void"
         return f"static {ret}{'' if ret.endswith('*') else ' '}bs_{p.cname}({args})"
 
@@ -573,10 +614,20 @@ class Compiler:
             if self.blocks:
                 raise CompileError(line, f"{word} inside a {self.blocks[-1][0]} block")
             self.proc = self.procs[toks[1].val.lower()]
-            self.locals = {n.lower(): Var(n.lower(), t, byref=is_rec(t))
-                           for n, t in self.proc.params}
-            for v in self.locals.values():
-                v.readonly = v.ctype == "str"
+            self.locals = {}
+            self.prologue = []
+            for pa in self.proc.params:
+                v = Var(pa.key, pa.ty, byref=pa.rank > 0 or pa.mode == "ref")
+                if pa.rank:
+                    v.dims = [None] * pa.rank
+                    v.sizes = [f"b89_d{k}_{pa.key}" for k in range(1, pa.rank + 1)]
+                    v.strsize = f"b89_s_{pa.key}" if pa.ty == "str" else None
+                elif pa.mode == "ro":
+                    v.readonly = True
+                elif pa.mode == "copy":     # BYVAL STRING: a local copy that can be changed
+                    self.prologue.append(f"  char bv_{pa.key}[256]; "
+                                         f"b89_sset(bv_{pa.key}, 256, b89_in_{pa.key});")
+                self.locals[pa.key] = v
             self.main_tmp_max, self.tmp_max = self.tmp_max, 0
             self.saved_out, self.out = self.out, []
             self.proc_line = line
@@ -593,8 +644,9 @@ class Compiler:
             pf = getattr(self.proc_line, "file", self.filename)
             code = [f'#line {int(self.proc_line)} "{pf}"', self.proc_header(self.proc), "{"]
             for v in self.locals.values():
-                if v.name not in {n.lower() for n, _ in self.proc.params}:
+                if v.name not in {pa.key for pa in self.proc.params}:
                     code.append(f"  {self.decl(v)};")
+            code += self.prologue
             for k in range(self.tmp_max):
                 code.append(f"  char b89_t{k}[{TMP_SIZE}];")
             if self.proc.ret == "str":
@@ -861,7 +913,7 @@ class Compiler:
                 raise CompileError(line, f"{word}: '{g.val}' must be a 2-dimension INTEGER array "
                                          f"(DIM {g.val}(rows, columns) AS INTEGER)")
             grid = f"&{v.ref}[0][0]"
-            rows, cols = v.dims[0] + 1, v.dims[1] + 1
+            rows, cols = v.size_exprs()
             p.expect_op(",")
             if word == "MAP":
                 ts = p.expect_id()
@@ -1070,7 +1122,7 @@ class Compiler:
         paren = p.more() and p.peek().is_("(")
         if paren:
             p.next()
-        args = p.expr_list(")" if paren else None, typed=True)
+        args = p.call_arguments(proc, ")" if paren else None)
         if paren:
             p.expect_op(")")
         p.end()
@@ -1158,7 +1210,11 @@ class Parser:
         self.cap = 255
         if ty == "str" and self.more() and self.peek().is_("*"):
             self.next()
-            self.cap = self.const_expr()
+            e, cty = self.add()               # not a whole expression: "= value" may follow
+            try:
+                self.cap = int(eval(e.replace("L", "").replace("/", "//"), {"__builtins__": {}}))
+            except Exception:
+                raise CompileError(self.line, "STRING * n: n must be a constant")
             if not 1 <= self.cap <= 255:
                 raise CompileError(self.line, "STRING * n: n must be between 1 and 255")
         if ty:
@@ -1207,7 +1263,9 @@ class Parser:
         whole: a whole array may be given without index (SAVE, LOAD)."""
         v = self.c.lookup(name_tok.val, self.line)
         code, ty, what = v.ref, v.ctype, name_tok.val
+        self.whole = None
         if v.dims and whole and not (self.more() and self.peek().is_("(")):
+            self.whole = (v.size_exprs(), v.str_size() if ty == "str" else None)
             return code, ty
         if v.dims:
             code += self.indices(v.dims, what)
@@ -1225,6 +1283,7 @@ class Parser:
             what = f"{what}.{f.val}"
             code, ty = f"{code}.bv_{fld.name}", fld.ctype
             if fld.dims and whole and not (self.more() and self.peek().is_("(")):
+                self.whole = (fld.size_exprs(), fld.str_size() if ty == "str" else None)
                 return code, ty
             if fld.dims:
                 code += self.indices(fld.dims, what)
@@ -1232,29 +1291,76 @@ class Parser:
                 raise CompileError(self.line, f"'{what}' is not an array")
         return code, ty
 
+    def call_arguments(self, proc, closer):
+        """Parses the arguments of a call: an expression, or a variable for a BYREF
+        parameter, or a whole array for an array parameter.
+        Returns [(code, type, whole array info or None, is a variable)]."""
+        args = []
+        if not self.more() or (closer and self.peek().is_(closer)):
+            return args
+        while True:
+            pa = proc.params[len(args)] if len(args) < len(proc.params) else None
+            if pa is not None and (pa.rank or pa.mode == "ref"):
+                t = self.next()
+                if t.kind != "id":
+                    raise CompileError(self.line, f"{proc.name}: '{pa.name}' is BYREF or an array: "
+                                                  "give a variable")
+                if pa.ty == "str" and not pa.rank:
+                    self.writable(t)
+                code, ty = self.lvalue(t, whole=bool(pa.rank))
+                if self.more() and not self.peek().is_(",") and not (closer and self.peek().is_(closer)):
+                    raise CompileError(self.line, f"{proc.name}: '{pa.name}' is BYREF: give a "
+                                                  "variable, not a calculation")
+                args.append((code, ty, self.whole, True))
+            else:
+                e, ty = self.expr()
+                args.append((e, ty, None, False))
+            if self.more() and self.peek().is_(","):
+                self.next()
+                continue
+            return args
+
     def call_args(self, proc, args):
-        """Checks the arguments of a call; TYPE arguments are passed by address."""
+        """Checks the arguments of a call and makes the C argument list."""
         if len(args) != len(proc.params):
             raise CompileError(self.line, f"{proc.name} takes {len(proc.params)} argument(s), "
                                           f"{len(args)} given")
         out = []
-        for (pname, pty), (code, ty) in zip(proc.params, args):
-            if pty == "str" or ty == "str":
-                if pty != ty:
-                    raise CompileError(self.line, f"{proc.name}: '{pname}' must be "
-                                                  f"{self.c.tname(pty)}, not {self.c.tname(ty)}")
-                out.append(code)
-            elif is_rec(pty) or is_rec(ty):
-                if pty != ty:
-                    raise CompileError(self.line, f"{proc.name}: '{pname}' must be "
-                                                  f"{self.c.tname(pty)}, not {self.c.tname(ty)}")
-                if not code.startswith(("bv_", "(*bv_")):
-                    raise CompileError(self.line, f"{proc.name}: '{pname}' must be a variable")
-                out.append(code[2:-1] if code.startswith("(*") and code.endswith(")")
-                           and code.count("(") == 1 else f"&{code}")
+        for pa, (code, ty, whole, is_var) in zip(proc.params, args):
+            want = self.c.tname(pa.ty) + ("()" if pa.rank else "")
+            if pa.rank:                               # array: sizes, then its address
+                if whole is None or len(whole[0]) != pa.rank or ty != pa.ty:
+                    raise CompileError(self.line, f"{proc.name}: '{pa.name}' must be an array "
+                                                  f"{self.c.tname(pa.ty)} with {pa.rank} "
+                                                  "dimension(s), given without index")
+                sizes, strsize = whole
+                out += sizes + ([strsize] if pa.ty == "str" else []) + [self.address(code)]
+            elif pa.mode == "ref":                    # BYREF: the address of the variable
+                if ty != pa.ty:
+                    raise CompileError(self.line, f"{proc.name}: '{pa.name}' is BYREF "
+                                                  f"{self.c.tname(pa.ty)}: give a variable of "
+                                                  f"that type, not {self.c.tname(ty)}")
+                if whole is not None:
+                    raise CompileError(self.line, f"{proc.name}: '{pa.name}' is not an array "
+                                                  "parameter: give an element")
+                if pa.ty == "str":
+                    out.append(f"sizeof({code})")
+                out.append(self.address(code))
+            elif pa.ty == "str" or ty == "str" or is_rec(pa.ty) or is_rec(ty):
+                if pa.ty != ty:
+                    raise CompileError(self.line, f"{proc.name}: '{pa.name}' must be "
+                                                  f"{want}, not {self.c.tname(ty)}")
+                out.append(code)                      # STRING (pointer), or a TYPE copied
             else:
-                out.append(conv(code, ty, pty))
+                out.append(conv(code, ty, pa.ty))
         return ", ".join(out)
+
+    @staticmethod
+    def address(code):
+        """&code; a BYREF parameter (*bv_x) is already the address bv_x."""
+        if code.startswith("(*") and code.endswith(")") and code.count("(") == 1:
+            return code[2:-1]
+        return f"&{code}"
 
     def num_expr(self):
         e, ty = self.expr()
@@ -1273,7 +1379,8 @@ class Parser:
         v = self.c.locals.get(name_tok.val.lower()) if self.c.proc else None
         if v is not None and v.readonly:
             raise CompileError(self.line, f"'{name_tok.val}' is a STRING parameter: it cannot "
-                                          "be changed (copy it to a local variable)")
+                                          f"be changed (BYVAL {name_tok.val} AS STRING gives a copy "
+                                          f"that can be changed, BYREF changes the caller's text)")
 
     def tmp(self):
         """A temporary string buffer for the current statement."""
@@ -1294,13 +1401,37 @@ class Parser:
         return ty
 
     def params(self):
+        """( [BYVAL | BYREF] name [(,...)] AS type, ... )"""
         params = []
         if self.more() and self.peek().is_("("):
             self.next()
             while not self.peek().is_(")"):
+                how = self.next().val.upper() if self.peek().is_("BYVAL", "BYREF") else None
                 n = self.expect_id()
+                rank = 0
+                if self.more() and self.peek().is_("("):     # a() or a(,): an array
+                    self.next()
+                    rank = 1
+                    while self.peek().is_(","):
+                        self.next()
+                        rank += 1
+                    self.expect_op(")")
                 self.expect_word("AS")
-                params.append((n.val, self.type_name()))
+                ty = self.type_name()
+                if rank:
+                    if how == "BYVAL":
+                        raise CompileError(self.line, f"'{n.val}()': arrays are always passed "
+                                                      "by reference (no BYVAL)")
+                    mode = "ref"
+                elif how == "BYREF":
+                    mode = "ref"
+                elif how == "BYVAL":
+                    mode = "copy" if ty == "str" else "val"
+                else:
+                    mode = "ro" if ty == "str" else "ref" if is_rec(ty) else "val"
+                if any(pa.key == n.val.lower() for pa in params):
+                    raise CompileError(self.line, f"two parameters named '{n.val}'")
+                params.append(Param(n.val, ty, mode, rank))
                 if not self.peek().is_(")"):
                     self.expect_op(",")
             self.next()
@@ -1616,6 +1747,24 @@ class Parser:
             return self.string_function(up)
         if up in ("WIDTH", "HEIGHT", "COLLIDE"):
             return self.image_function(up)
+        if up in ("UBOUND", "LBOUND"):
+            self.expect_op("(")
+            t = self.expect_id()
+            code, ty = self.lvalue(t, whole=True)
+            if self.whole is None:
+                raise CompileError(self.line, f"{up}: '{t.val}' is not an array (give it without index)")
+            sizes = self.whole[0]
+            d = 1
+            if self.more() and self.peek().is_(","):
+                self.next()
+                d = self.const_expr()
+            self.expect_op(")")
+            if not 1 <= d <= len(sizes):
+                raise CompileError(self.line, f"{up}: '{t.val}' has {len(sizes)} dimension(s)")
+            if up == "LBOUND":
+                return "0", "short"
+            sz = sizes[d - 1]
+            return (str(int(sz) - 1) if sz.isdigit() else f"({sz} - 1)"), "short"
         if up == "EXISTS":
             self.expect_op("(")
             n = self.save_name("EXISTS")
@@ -1650,7 +1799,7 @@ class Parser:
             a = []
             if self.more() and self.peek().is_("("):
                 self.next()
-                a = self.expr_list(")", typed=True)
+                a = self.call_arguments(proc, ")")
                 self.expect_op(")")
             call = f"bs_{proc.cname}({self.call_args(proc, a)})"
             if proc.ret == "str":

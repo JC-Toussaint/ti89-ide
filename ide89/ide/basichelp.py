@@ -17,15 +17,33 @@ HELP = {
              "Defines a record: a group of fields. Fields can be arrays or other TYPEs. A TYPE "
              "variable is copied with =, and passed to a SUB by reference (the SUB can change it).",
              "TYPE Enemy\n  x AS INTEGER\n  y AS FIXED\n  alive AS BOOLEAN\nEND TYPE\nDIM e(10) AS Enemy\ne(3).x = 40"),
-    "SUB": ("SUB name [(param AS type, ...)]\n  ...\nEND SUB",
+    "SUB": ("SUB name [([BYVAL | BYREF] param [()] AS type, ...)]\n  ...\nEND SUB",
             "Defines a procedure. Call it with its name and its arguments (or CALL name(...)). "
-            "Numbers and STRINGs are passed by value, TYPE variables by reference. DIM inside a "
-            "SUB declares local variables. EXIT SUB leaves it.",
+            "Without keyword, numbers are passed by value, STRINGs read only, TYPEs by reference. "
+            "BYREF: the SUB changes the caller's variable; BYVAL: a copy. a() or a(,) is an "
+            "array parameter (always by reference; UBOUND gives its size). DIM inside a SUB "
+            "declares local variables. EXIT SUB leaves it.",
             "SUB box(x AS INTEGER, y AS INTEGER)\n  BOX x, y, x + 9, y + 9 FILL\nEND SUB\nbox 10, 20"),
-    "FUNCTION": ("FUNCTION name [(param AS type, ...)] AS type\n  ...\n  RETURN value\nEND FUNCTION",
+    "FUNCTION": ("FUNCTION name [([BYVAL | BYREF] param [()] AS type, ...)] AS type\n  ...\n  RETURN value\nEND FUNCTION",
                  "Defines a function, used in expressions. RETURN gives its value. A function "
                  "returning a STRING may have a name ending with $.",
                  "FUNCTION square(n AS INTEGER) AS LONG\n  RETURN n * n\nEND FUNCTION\nPRINT square(12)"),
+    "BYREF": ("SUB name(BYREF param AS type)",
+              "The parameter is the caller's variable itself: changing it changes the caller's "
+              "variable. The argument must be a variable, an array element or a field of the "
+              "same type (not a calculation).",
+              "SUB double(BYREF n AS INTEGER)\n  n = n * 2\nEND SUB\ndouble score"),
+    "BYVAL": ("SUB name(BYVAL param AS type)",
+              "The parameter is a copy: the SUB can change it, the caller's variable stays the "
+              "same. Numbers are BYVAL without keyword; BYVAL makes a STRING changeable and a "
+              "TYPE copied.",
+              "SUB show(BYVAL t AS STRING)\n  t = UCASE$(t)\n  PRINT t\nEND SUB"),
+    "UBOUND": ("UBOUND(array [, dimension])",
+               "The largest index of an array (of the dimension 1, 2...): mostly used with an "
+               "array parameter, whose size depends on the caller.",
+               "FUNCTION total(a() AS INTEGER) AS LONG\n  DIM k AS INTEGER, t AS LONG\n  FOR k = 0 TO UBOUND(a)\n    t += a(k)\n  NEXT\n  RETURN t\nEND FUNCTION"),
+    "LBOUND": ("LBOUND(array [, dimension])", "The smallest index of an array: always 0 in Basic89.",
+               "FOR k = LBOUND(a) TO UBOUND(a)"),
     "RETURN": ("RETURN value", "Leaves a FUNCTION and gives its value.",
                "FUNCTION sign(n AS INTEGER) AS INTEGER\n  IF n < 0 THEN RETURN -1\n  RETURN 1\nEND FUNCTION"),
     "END": ("END  |  END IF / END SUB / END FUNCTION / END SELECT / END TYPE / END IMAGE",

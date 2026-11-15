@@ -441,25 +441,87 @@ class VariableReader:
         fb = self.frame_base(func, cu, off)
         out = []
 
+        hidden = {}            # Basic89: sizes of the array parameters (b89_d1_x, b89_s_x)
+
         def walk(scope, prefix):
             for d in scope.iter_children():
                 if d.tag in ("DW_TAG_formal_parameter", "DW_TAG_variable") and "DW_AT_name" in d.attributes:
-                    nm = display_name(d.attributes["DW_AT_name"].value.decode("latin-1"))
-                    if nm is None:
-                        continue
+                    raw = d.attributes["DW_AT_name"].value.decode("latin-1")
                     loc = d.attributes.get("DW_AT_location")
                     addr = reg = None
                     if loc is not None and loc.form.startswith("DW_FORM_block"):
                         addr, reg = self.eval_location(loc.value, fb)
-                    out.append(self.node(nm, self._type(d), addr, f"L/{prefix}{nm}", reg))
+                    if raw.startswith(("b89_d", "b89_s_")):
+                        hidden[raw] = self._int_at(addr, reg, 2)
+                    nm = display_name(raw)
+                    if nm is None:
+                        continue
+                    out.append((nm, raw, d, addr, reg, f"L/{prefix}{nm}"))
                 elif d.tag == "DW_TAG_lexical_block":
                     lo = d.attributes.get("DW_AT_low_pc")
                     hi = d.attributes.get("DW_AT_high_pc")
                     if lo and hi and lo.value <= off < hi.value:
                         walk(d, prefix + "{}/")
         walk(func, "")
+        nodes = []
+        for nm, raw, d, addr, reg, path in out:
+            t = self._type(d)
+            st = self._strip(t)
+            if self.basic and d.tag == "DW_TAG_formal_parameter" and st is not None \
+                    and st.tag == "DW_TAG_pointer_type" and raw.startswith("bv_"):
+                node = self._basic_param(nm, raw[3:], st, addr, reg, path, hidden)
+                if node is not None:
+                    nodes.append(node)
+                    continue
+            nodes.append(self.node(nm, t, addr, path, reg))
         fname = func.attributes["DW_AT_name"].value.decode("latin-1")
-        return display_name(fname) or fname, out
+        return display_name(fname) or fname, nodes
+
+    def _int_at(self, addr, reg, size):
+        try:
+            if reg is not None:
+                v = self._reg(reg) & ((1 << (8 * size)) - 1)
+                return v - (1 << (8 * size)) if v >> (8 * size - 1) else v
+            b = self.read(addr, size) if addr is not None else None
+            return int.from_bytes(b, "big", signed=True) if b else None
+        except Exception:
+            return None
+
+    def _basic_param(self, nm, base, ptr_type, addr, reg, path, hidden):
+        """Basic89 parameter passed by address: a BYREF variable (shown with its value) or
+        an array (shown with the sizes passed in its hidden parameters)."""
+        p = self._int_at(addr, reg, 4)
+        if p is None:
+            return None
+        p &= 0xFFFFFF
+        target = self._type(ptr_type)
+        tt = self._strip(target)
+        if tt is None:
+            return None
+        if tt.tag != "DW_TAG_array_type":                 # BYREF number, STRING, TYPE
+            node = self.node(nm, target, p, path)
+            node.type_name = "BYREF " + node.type_name
+            return node
+        dims = []
+        k = 1
+        while f"b89_d{k}_{base}" in hidden:
+            dims.append(hidden[f"b89_d{k}_{base}"])
+            k += 1
+        if f"b89_s_{base}" in hidden:
+            dims.append(hidden[f"b89_s_{base}"])
+        if not dims or any(x is None or x <= 0 for x in dims):
+            return None
+        elem = self._type(tt)
+        et = self._strip(elem)
+        text_rows = et is not None and et.tag == "DW_TAG_base_type" and self._size(et) == 1
+        bounds = dims[:-1] if text_rows else dims
+        bnd = ", ".join(str(x - 1) for x in bounds)
+        tn = (f"STRING * {dims[-1] - 1}({bnd})" if text_rows
+              else f"{self.type_name(elem)}({bnd})")
+        if text_rows and len(dims) == 1:
+            return self._row_node(nm, elem, dims, p, path)
+        return VarNode(nm, tn, f"[{dims[0]}]", path,
+                       lambda: self._subarray(elem, dims, p, path))
 
     def globals(self):
         out = []

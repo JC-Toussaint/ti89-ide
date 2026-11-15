@@ -67,7 +67,7 @@ _BAS_OPENS = re.compile(
     r"SELECT\b|CASE\b(?!.*:)|SUB\b|FUNCTION\b|TYPE\b|IMAGE\b)", re.I)
 _BAS_BUILTINS = {"KEYDOWN", "RND", "ABS", "MIN", "MAX", "ISIN", "ICOS", "GETKEY", "TICKS",
                  "TRUE", "FALSE", "BLACK", "WHITE", "XOR", "LIGHTGRAY", "DARKGRAY",
-                 "WIDTH", "HEIGHT", "COLLIDE", "SQR", "SIN", "COS", "INT", "ROUND", "PI",
+                 "WIDTH", "HEIGHT", "COLLIDE", "UBOUND", "LBOUND", "SQR", "SIN", "COS", "INT", "ROUND", "PI",
                  "LEN", "LEFT$", "RIGHT$", "MID$", "STR$", "CHR$", "ASC", "INSTR", "VAL",
                  "UCASE$", "LCASE$"}
 
