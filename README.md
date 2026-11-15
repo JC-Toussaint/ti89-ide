@@ -227,6 +227,12 @@ variables); `EXISTS("hiscore")`, `KILL "hiscore"`.
 
 Comments start with `'` or `REM`; names and keywords ignore case.
 
+In the editor: **F1** (or *Help > Basic89 Help*) shows the help of the keyword under the
+cursor, whose syntax is also shown in the status bar; **Ctrl+Space** completes the word
+being typed (keywords, functions, and the names declared in the program); the next line
+is indented after `IF ... THEN`, `FOR`, `DO`, `SUB`... The debugger shows the variables
+with their Basic types (`INTEGER`, `BOOLEAN` as TRUE/FALSE, `STRING * 10`, `FIXED(2)`...).
+
 ## Example game
 
 ![Meteor Dodge](docs/game.png)

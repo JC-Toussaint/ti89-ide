@@ -15,6 +15,8 @@ from . import realcalc
 from .memview import MemoryView
 from .regview import RegisterView
 from . import basichelp
+from .complete import Completer, basic_words, generic_words
+from .editor import KEYWORDS as C_KEYWORDS, TYPES as C_TYPES
 from .icons import make_icon
 from PIL import ImageTk
 
@@ -290,6 +292,7 @@ class IdeApp:
 
         self.editor = CodeEditor(left, on_change=self._on_change, on_cursor=self._on_cursor,
                                  on_gutter_click=self.toggle_breakpoint)
+        self.editor.completer = Completer(self.editor, self._completion_words)
         left.add(self.editor, weight=4)
 
         bottom = ttk.Notebook(left)
@@ -615,6 +618,14 @@ class IdeApp:
                 hint = found[1][0].splitlines()[0]
                 hint = hint if len(hint) <= 60 else hint[:57] + "..."
         self.hint_label.configure(text=hint)
+
+    def _completion_words(self):
+        src = self.editor.get()
+        if self.editor.language == "basic":
+            return basic_words(src)
+        if self.editor.language == "c":
+            return generic_words(src, C_KEYWORDS + C_TYPES)
+        return generic_words(src)
 
     # ------------------------------------------------------------ aide Basic89
     def _word_at_cursor(self):

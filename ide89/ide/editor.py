@@ -60,7 +60,11 @@ _BAS_TOKEN_RE = re.compile(
     r"|(?P<number>&[Hh][0-9A-Fa-f]+|&[Bb][01]+|\b\d+\b)"
     r"|(?P<word>\b[A-Za-z_]\w*\$?)",
     re.I)
-_BAS_TYPES = {"INTEGER", "LONG", "BOOLEAN"}
+_BAS_TYPES = {"INTEGER", "LONG", "BOOLEAN", "FIXED", "STRING"}
+# Lines after which the next line is indented: a block starts
+_BAS_OPENS = re.compile(
+    r"^\s*(?:IF\b.*\bTHEN\s*(?:'.*)?$|ELSE\s*(?:'.*)?$|ELSEIF\b|FOR\b|DO\b|WHILE\b|"
+    r"SELECT\b|CASE\b(?!.*:)|SUB\b|FUNCTION\b|TYPE\b|IMAGE\b)", re.I)
 _BAS_BUILTINS = {"KEYDOWN", "RND", "ABS", "MIN", "MAX", "ISIN", "ICOS", "GETKEY", "TICKS",
                  "TRUE", "FALSE", "BLACK", "WHITE", "XOR", "LIGHTGRAY", "DARKGRAY",
                  "WIDTH", "HEIGHT", "COLLIDE", "SQR", "SIN", "COS", "INT", "ROUND", "PI",
@@ -81,6 +85,7 @@ class CodeEditor(tk.Frame):
         self.language = "c"          # "c", "gas" (GNU as) ou "a68k"
         self.exec_line = None        # ligne où le programme est en pause (flèche dans la marge)
         self._hl_job = None
+        self.completer = None        # Completer (complete.py), set by the application
 
         self.gutter = tk.Canvas(self, width=56, bg=THEME["gutter_bg"], highlightthickness=0)
         self.gutter.pack(side="left", fill="y")
@@ -109,7 +114,7 @@ class CodeEditor(tk.Frame):
         t.tag_lower("current_line")
 
         t.bind("<<Modified>>", self._on_modified)
-        t.bind("<KeyRelease>", lambda e: self._cursor_moved())
+        t.bind("<KeyRelease>", self._key_release)
         t.bind("<ButtonRelease-1>", lambda e: self._cursor_moved())
         t.bind("<Return>", self._auto_indent)
         t.bind("<Tab>", self._tab)
@@ -168,17 +173,29 @@ class CodeEditor(tk.Frame):
             pass
         return "break"
 
+    def _key_release(self, event):
+        if self.completer and self.completer.active and event.keysym not in (
+                "Up", "Down", "Return", "Tab", "Escape", "Control_L", "Control_R"):
+            self.completer.refresh()
+        self._cursor_moved()
+
     def _auto_indent(self, event):
+        if self.completer and self.completer.active:
+            return self.completer.accept()
         t = self.text
         line = t.get("insert linestart", "insert")
         indent = re.match(r"[ \t]*", line).group(0)
         if line.rstrip().endswith("{"):
+            indent += "  "
+        elif self.language == "basic" and _BAS_OPENS.match(line):
             indent += "  "
         t.insert("insert", "\n" + indent)
         t.see("insert")
         return "break"
 
     def _tab(self, event):
+        if self.completer and self.completer.active:
+            return self.completer.accept()
         t = self.text
         if t.tag_ranges("sel"):
             first = int(t.index("sel.first").split(".")[0])
