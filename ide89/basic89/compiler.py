@@ -8,6 +8,8 @@ the DWARF debug information refer to the lines of the BASIC program: the IDE's d
 
     python -m basic89 program.b89          ->  program.b89.c
 """
+import decimal
+import math
 import os
 import re
 
@@ -37,7 +39,7 @@ class Loc(int):
 _TOKEN_RE = re.compile(r"""
     (?P<ws>[ \t]+)
   | (?P<comment>'.*)
-  | (?P<num>&[Hh][0-9A-Fa-f]+|&[Bb][01]+|\d+\.\d*|\.\d+|\d+)
+  | (?P<num>&[Hh][0-9A-Fa-f]+|&[Bb][01]+|(?:\d+\.\d*|\.\d+|\d+)[eE][-+]?\d+|\d+\.\d*|\.\d+|\d+)
   | (?P<str>"[^"\n]*"?)
   | (?P<id>[A-Za-z_][A-Za-z0-9_]*\$?)
   | (?P<op>\+=|-=|\*=|<>|<=|>=|[-+*/\\=<>(),;:.])
@@ -86,7 +88,7 @@ BYVAL BYREF
 IMAGE SPRITE TILESET MAP MAPROW SOUND PLAY BEEP SAVE LOAD KILL
 """.split())
 
-TYPES = {"INTEGER": "short", "LONG": "long", "BOOLEAN": "bool", "FIXED": "fixed",
+TYPES = {"INTEGER": "short", "LONG": "long", "BOOLEAN": "bool", "FIXED": "fixed", "FLOAT": "float",
          "STRING": "str"}
 STR_FUNCS = {"LEFT$", "RIGHT$", "MID$", "STR$", "CHR$", "UCASE$", "LCASE$", "LEN", "ASC",
              "INSTR", "VAL"}
@@ -119,10 +121,40 @@ def is_rec(ty):
     return ty.startswith("rec:")
 
 
+class DecRange(Exception):
+    pass
+
+
+def dec_text(code):
+    """Text of a decimal literal: B89DEC(2.5) -> "2.5"."""
+    return code[7:-1]
+
+
 def conv(code, frm, to):
-    """C code converting a number from type frm to type to."""
+    """C code converting a number from type frm to type to.
+    "dec": a number written with a point (B89DEC(2.5)): a FLOAT with a FLOAT, else a FIXED.
+    "float": FLOAT, the TI's floating point (BCD, about 14 digits)."""
     if frm == to or is_rec(frm) or is_rec(to):
         return code
+    if frm == "dec":
+        txt = dec_text(code)
+        if to == "float":
+            return f"({txt})"
+        if to == "fixed":
+            raw = round(float(txt) * 65536)
+            if not -(1 << 31) <= raw < (1 << 31):
+                raise DecRange(f"{txt} is too large for a FIXED (at most 32767.99998): "
+                               "use a FLOAT")
+            return f"({raw}L)"
+        return str(math.floor(float(txt)))     # integer: rounded down
+    if to == "float":
+        if frm == "fixed":
+            return f"((float)({code}) / 65536.0)"
+        return f"((float)({code}))"
+    if frm == "float":
+        if to == "fixed":
+            return f"((long)floor(({code}) * 65536.0))"
+        return f"((long)floor({code}))"        # rounded down
     if to == "fixed":
         return f"((long)({code}) << 16)"
     if frm == "fixed":
@@ -139,7 +171,8 @@ def fixed_literal(text, line):
 
 def basic_type(ty):
     return ty[4:] if is_rec(ty) else {"short": "INTEGER", "long": "LONG", "bool": "BOOLEAN",
-                                      "fixed": "FIXED", "str": "STRING"}.get(ty, ty)
+                                      "fixed": "FIXED", "dec": "FIXED", "float": "FLOAT",
+                                      "str": "STRING"}.get(ty, ty)
 
 
 class Var:
@@ -270,6 +303,11 @@ class Compiler:
 
     # ---------------------------------------------------------- output
     def emit(self, line, text):
+        if "B89DEC(" in text:                 # a number with a point used as it is: FIXED
+            try:
+                text = re.sub(r"B89DEC\(([^)]*)\)", lambda m: conv(m.group(0), "dec", "fixed"), text)
+            except DecRange as e:
+                raise CompileError(line, str(e))
         self.out.append(f'#line {int(line)} "{getattr(line, "file", self.filename)}"')
         self.out.append("  " * self.indent + text)
 
@@ -313,7 +351,8 @@ class Compiler:
                                      "(LEFT$...); declare text with DIM name AS STRING")
         if up in KEYWORDS or up in TYPES or up in BUILTINS or up in COLORS or up in STR_FUNCS or \
                 up in ("TRUE", "FALSE", "KEYDOWN", "INT", "ROUND", "SQR", "SIN", "COS",
-                       "WIDTH", "HEIGHT", "COLLIDE", "EXISTS", "UBOUND", "LBOUND") or \
+                       "WIDTH", "HEIGHT", "COLLIDE", "EXISTS", "UBOUND", "LBOUND",
+                       "TAN", "ATN", "EXP", "LOG") or \
                 up.startswith("KEY_"):
             raise CompileError(line, f"'{name}' is a reserved word")
         key = name.lower()
@@ -361,7 +400,10 @@ class Compiler:
         self.out = main
         procs_code = []
         for toks in toklines:
-            self.statement_line(toks, procs_code)
+            try:
+                self.statement_line(toks, procs_code)
+            except DecRange as e:
+                raise CompileError(toks[0].line, str(e))
         if self.proc:
             raise CompileError(self.proc.line, f"SUB/FUNCTION {self.proc.name} has no END")
         if self.blocks:
@@ -720,9 +762,12 @@ class Compiler:
             if sty == "str":
                 self.emit(line, f"char b89_s{n}[{TMP_SIZE}]; b89_sset(b89_s{n}, {TMP_SIZE}, {e});")
             else:
-                self.emit(line, f"long b89_s{n} __attribute__((unused)) = {e};")
+                if sty == "dec":
+                    e, sty = conv(e, "dec", "fixed"), "fixed"
+                ctyp = "float" if sty == "float" else "long"
+                self.emit(line, f"{ctyp} b89_s{n} __attribute__((unused)) = {e};")
             # [kind, line, CASE ELSE seen, temp number, number of CASEs]
-            self.blocks.append(["SELECT", line, False, n, 0, sty])
+            self.blocks.append(["SELECT", line, False, n, 0, "fixed" if sty == "dec" else sty])
         elif word == "CASE":
             b = self.need_block("SELECT", line, "CASE")
             if b[2]:
@@ -866,8 +911,11 @@ class Compiler:
                 self.emit(line, f"b89_input({target}, sizeof({target}));")
             else:
                 p.num(ty)
-                fn = "b89_input_fixed()" if ty == "fixed" else "b89_input_long()"
-                self.emit(line, f"{target} = {conv(fn, 'fixed' if ty == 'fixed' else 'long', ty)};")
+                if ty == "float":
+                    self.emit(line, f"{target} = b89_input_float();")
+                else:
+                    fn = "b89_input_fixed()" if ty == "fixed" else "b89_input_long()"
+                    self.emit(line, f"{target} = {conv(fn, 'fixed' if ty == 'fixed' else 'long', ty)};")
         elif word == "CLS":
             p.end()
             self.emit(line, "b89_cls();")
@@ -1070,10 +1118,11 @@ class Compiler:
         if lit:
             st = step
             test = f"{ref} >= b89_to{n}" if neg else f"{ref} <= b89_to{n}"
-            self.emit(line, f"long b89_to{n} = {end};")
+            self.emit(line, f"{'float' if ty == 'float' else 'long'} b89_to{n} = {end};")
         else:
             st = f"b89_st{n}"
-            self.emit(line, f"long b89_to{n} = {end}; long b89_st{n} = {step};")
+            tt = "float" if ty == "float" else "long"
+            self.emit(line, f"{tt} b89_to{n} = {end}; {tt} b89_st{n} = {step};")
             test = f"(b89_st{n} >= 0 ? {ref} <= b89_to{n} : {ref} >= b89_to{n})"
         self.emit(line, f"for ({ref} = {start}; {test}; ) {{")
         self.indent += 1
@@ -1105,7 +1154,12 @@ class Compiler:
                     args.append(e)
                     continue
                 p.num(ty)
-                if ty == "fixed":
+                if ty == "dec":
+                    e, ty = conv(e, "dec", "fixed"), "fixed"
+                if ty == "float":
+                    fmt.append("%s")
+                    args.append(f"b89_fltstr({e})")
+                elif ty == "fixed":
                     fmt.append("%s")
                     args.append(f"b89_fstr({e})")
                 else:
@@ -1160,7 +1214,7 @@ class Compiler:
             self.emit(line, f"{target} = {e};")
         elif op.val == "=":
             self.emit(line, f"{target} = {conv(e, ety, ty)};")
-        elif "fixed" in (ty, ety):
+        elif {"fixed", "float", "dec"} & {ty, ety}:
             # x += 0.5, f *= 2... : computed with the FIXED rules, then stored
             r, rty = p.arith(target, ty, op.val[0], e, ety)
             self.emit(line, f"{target} = {conv(r, rty, ty)};")
@@ -1500,6 +1554,15 @@ class Parser:
                 self.i + 1 == len(self.toks) or self.toks[self.i + 1].is_(",")):
             return f'"{c_string(self.next().val, self.line)}"', "str"
         e, ty = self.num_expr()
+        if ty == "dec" and re.fullmatch(r"B89DEC\([^)]*\)", e):
+            return dec_text(e), "dec"               # kept as written: exact in a FLOAT
+        if ty == "float" and re.fullmatch(r"\(-?[0-9.eE+-]+\)", e):
+            return e, "float"
+        if ty in ("dec", "float"):
+            if ty == "float":
+                raise CompileError(self.line, "a FLOAT constant must be a single number")
+            e, ty = conv(e, "dec", "fixed") if e.startswith("B89DEC") else e, "fixed"
+            e = re.sub(r"B89DEC\(([^)]*)\)", lambda m: conv(m.group(0), "dec", "fixed"), e)
         try:
             return int(eval(e.replace("L", "").replace("/", "//"), {"__builtins__": {}})), ty
         except Exception:
@@ -1585,6 +1648,31 @@ class Parser:
                                           "(STR$() and VAL() convert)")
         self.num(ta), self.num(tb)
         cmp = {"=": "==", "<>": "!=", "<": "<", ">": ">", "<=": "<=", ">=": ">="}
+        if "dec" in (ta, tb) and op in ("+", "-", "*", "/"):
+            # numbers written in the program (0.1 * 3, 1 / 3.0): computed now, exactly, and
+            # kept as a number with a point (exact in a FLOAT, FIXED elsewhere)
+            va, vb = self.literal_value(a, ta), self.literal_value(b, tb)
+            if va is not None and vb is not None and not (op == "/" and vb == 0):
+                with decimal.localcontext() as ctx:
+                    ctx.prec = 16
+                    r = {"+": va + vb, "-": va - vb, "*": va * vb, "/": va / vb}[op]
+                txt = str(r.normalize())
+                if "." not in txt and "E" not in txt:
+                    txt += ".0"
+                return f"B89DEC({txt})", "dec"
+        if "float" in (ta, tb):                 # FLOAT if one side is (TI floating point)
+            fa, fb = conv(a, ta, "float"), conv(b, tb, "float")
+            if op in cmp:
+                return f"({fa} {cmp[op]} {fb})", "short"
+            if op in ("+", "-", "*", "/"):
+                return f"({fa} {op} {fb})", "float"
+            if op == "\\":
+                return f"((long)floor({fa} / {fb}))", "long"
+            raise CompileError(self.line, "MOD works on integers only (use INT() first)")
+        if ta == "dec":                         # a number with a point, with no FLOAT: FIXED
+            a, ta = conv(a, "dec", "fixed"), "fixed"
+        if tb == "dec":
+            b, tb = conv(b, "dec", "fixed"), "fixed"
         if "fixed" in (ta, tb):
             fa, fb = conv(a, ta, "fixed"), conv(b, tb, "fixed")
             if op in cmp:
@@ -1609,6 +1697,14 @@ class Parser:
         cop = {"\\": "/", "MOD": "%"}.get(op, op)
         return f"({a} {cop} {b})", "long" if "long" in (ta, tb) else "short"
 
+    @staticmethod
+    def literal_value(code, ty):
+        """Value of a number written in the program, or None."""
+        if ty == "dec":
+            return decimal.Decimal(dec_text(code))
+        m = re.fullmatch(r"\(?(-?\d+)L?\)?", code) if ty in ("short", "long") else None
+        return decimal.Decimal(int(m.group(1))) if m else None
+
     def add(self):
         a, ta = self.mul()
         while self.more() and self.peek().is_("+", "-"):
@@ -1629,6 +1725,9 @@ class Parser:
         if self.more() and self.peek().is_("-"):
             self.next()
             a, ta = self.unary()
+            if ta == "dec":
+                txt = dec_text(a)
+                return f"B89DEC({txt[1:] if txt.startswith('-') else '-' + txt})", "dec"
             return f"(-{a})", self.num(ta)
         if self.more() and self.peek().is_("+"):
             self.next()
@@ -1696,6 +1795,10 @@ class Parser:
                 a.append(code if up == "STR$" else conv(code, ty, "long"))
         if up == "STR$":
             ty = args[0][1]
+            if ty == "dec":
+                a[0], ty = conv(args[0][0], "dec", "fixed"), "fixed"
+            if ty == "float":
+                return f"b89_sset({self.tmp()}, {TMP_SIZE}, b89_fltstr({a[0]}))", "str"
             if ty == "fixed":
                 return f"b89_sset({self.tmp()}, {TMP_SIZE}, b89_fstr({a[0]}))", "str"
             return f"b89_str({self.tmp()}, {a[0]})", "str"
@@ -1706,7 +1809,7 @@ class Parser:
         if up == "INSTR":
             return f"b89_instr({a[0]}, {a[1]})", "long"
         if up == "VAL":
-            return f"b89_fval({a[0]})", "fixed"
+            return f"atof({a[0]})", "float"
         if up == "MID$":
             return f"b89_mid({self.tmp()}, {a[0]}, {a[1]}, {a[2] if len(a) > 2 else '-1'})", "str"
         fn = {"LEFT$": "b89_left", "RIGHT$": "b89_right", "CHR$": "b89_chr",
@@ -1714,7 +1817,8 @@ class Parser:
         return f"{fn}({self.tmp()}, {', '.join(a)})", "str"
 
     def typed_builtin(self, up):
-        """Functions whose result follows the type of their arguments (FIXED or integer)."""
+        """Functions whose result follows the type of their arguments (FLOAT, FIXED or
+        integer); TAN, ATN, EXP and LOG always give a FLOAT."""
         self.expect_op("(")
         args = self.expr_list(")", typed=True)
         self.expect_op(")")
@@ -1723,7 +1827,23 @@ class Parser:
             raise CompileError(self.line, f"{up} takes {n} argument(s), {len(args)} given")
         for _, ty in args:
             self.num(ty)
+        if up in ("TAN", "ATN", "EXP", "LOG") or any(ty == "float" for _, ty in args):
+            args = [(conv(c, ty, "float"), "float") for c, ty in args]
+        else:
+            args = [(conv(c, ty, "fixed"), "fixed") if ty == "dec" else (c, ty) for c, ty in args]
         (a, ta) = args[0]
+        if ta == "float":
+            if up == "ABS":
+                return f"fabs({a})", "float"
+            if up in ("MIN", "MAX"):
+                return f"b89_f{up.lower()}({a}, {args[1][0]})", "float"
+            if up == "INT":                     # rounded down
+                return f"((long)floor({a}))", "long"
+            if up == "ROUND":
+                return f"((long)floor(({a}) + 0.5))", "long"
+            fn = {"SQR": "sqrt", "SIN": "sin", "COS": "cos", "TAN": "tan", "ATN": "atan",
+                  "EXP": "exp", "LOG": "log"}[up]
+            return f"{fn}({a})", "float"
         if up == "ABS":
             return f"b89_abs({a})", "fixed" if ta == "fixed" else "long"
         if up in ("MIN", "MAX"):
@@ -1739,8 +1859,10 @@ class Parser:
 
     def primary(self):
         t = self.next()
+        if t.kind == "num" and ("e" in t.val.lower() and not t.val.startswith("&")):
+            return f"({t.val})", "float"           # 1.5E3: a FLOAT
         if t.kind == "num" and "." in t.val:
-            return fixed_literal(t.val, self.line), "fixed"
+            return f"B89DEC({t.val})", "dec"        # FLOAT with a FLOAT, else FIXED
         if t.kind == "num":
             v = t.val
             n = int(v[2:], 16) if v[:2].upper() == "&H" else \
@@ -1799,7 +1921,7 @@ class Parser:
             return f"b89_exists({n})", "short"
         if t.val.endswith("$") and t.val.lower() not in self.c.procs:
             raise CompileError(self.line, f"unknown function '{t.val}'")
-        if up in ("ABS", "MIN", "MAX", "INT", "ROUND", "SQR", "SIN", "COS"):
+        if up in ("ABS", "MIN", "MAX", "INT", "ROUND", "SQR", "SIN", "COS", "TAN", "ATN", "EXP", "LOG"):
             return self.typed_builtin(up)
         if up in BUILTINS:
             n, tmpl, ty = BUILTINS[up]
@@ -1816,6 +1938,10 @@ class Parser:
             v, cty = self.c.consts[key]
             if cty == "str":
                 return v, "str"
+            if cty == "dec":
+                return f"B89DEC({v})", "dec"
+            if cty == "float":
+                return v, "float"
             if cty == "fixed":
                 return f"({v}L)", "fixed"
             return (f"{v}L", "long") if abs(v) > 32767 else (f"({v})" if v < 0 else str(v), "short")

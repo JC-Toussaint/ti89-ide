@@ -198,7 +198,8 @@ class VariableReader:
             if name == "b89bool":
                 return "BOOLEAN"
             if self.basic and tag == "DW_TAG_base_type":
-                return {"short int": "INTEGER", "long int": "LONG"}.get(name, name)
+                return {"short int": "INTEGER", "long int": "LONG", "float": "FLOAT",
+                        "double": "FLOAT"}.get(name, name)
             prefix = {"DW_TAG_structure_type": "struct ", "DW_TAG_union_type": "union ",
                       "DW_TAG_enumeration_type": "enum "}.get(tag, "")
             return prefix + name

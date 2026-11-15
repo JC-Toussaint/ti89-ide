@@ -60,14 +60,14 @@ _BAS_TOKEN_RE = re.compile(
     r"|(?P<number>&[Hh][0-9A-Fa-f]+|&[Bb][01]+|\b\d+\b)"
     r"|(?P<word>\b[A-Za-z_]\w*\$?)",
     re.I)
-_BAS_TYPES = {"INTEGER", "LONG", "BOOLEAN", "FIXED", "STRING"}
+_BAS_TYPES = {"INTEGER", "LONG", "BOOLEAN", "FIXED", "FLOAT", "STRING"}
 # Lines after which the next line is indented: a block starts
 _BAS_OPENS = re.compile(
     r"^\s*(?:IF\b.*\bTHEN\s*(?:'.*)?$|ELSE\s*(?:'.*)?$|ELSEIF\b|FOR\b|DO\b|WHILE\b|"
     r"SELECT\b|CASE\b(?!.*:)|SUB\b|FUNCTION\b|TYPE\b|IMAGE\b)", re.I)
 _BAS_BUILTINS = {"KEYDOWN", "RND", "ABS", "MIN", "MAX", "ISIN", "ICOS", "GETKEY", "TICKS",
                  "TRUE", "FALSE", "BLACK", "WHITE", "XOR", "LIGHTGRAY", "DARKGRAY",
-                 "WIDTH", "HEIGHT", "COLLIDE", "UBOUND", "LBOUND", "SQR", "SIN", "COS", "INT", "ROUND", "PI",
+                 "WIDTH", "HEIGHT", "COLLIDE", "UBOUND", "LBOUND", "TAN", "ATN", "EXP", "LOG", "SQR", "SIN", "COS", "INT", "ROUND", "PI",
                  "LEN", "LEFT$", "RIGHT$", "MID$", "STR$", "CHR$", "ASC", "INSTR", "VAL",
                  "UCASE$", "LCASE$"}
 

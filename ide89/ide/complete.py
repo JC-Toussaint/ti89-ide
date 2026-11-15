@@ -14,7 +14,7 @@ def basic_words(source):
     from basic89 import compiler as c
     words = set(c.KEYWORDS) | set(c.TYPES) | set(c.BUILTINS) | set(c.STR_FUNCS) | set(c.COLORS)
     words |= {"KEYDOWN", "TRUE", "FALSE", "INT", "ROUND", "SQR", "SIN", "COS", "WIDTH",
-              "HEIGHT", "COLLIDE", "EXISTS", "ABS", "MIN", "MAX", "UBOUND", "LBOUND"}
+              "HEIGHT", "COLLIDE", "EXISTS", "ABS", "MIN", "MAX", "UBOUND", "LBOUND", "TAN", "ATN", "EXP", "LOG"}
     words |= {"KEY_" + k for k in c.KEYS}
     code = re.sub(r"'.*|\"[^\"\n]*\"?", "", source)          # without comments and texts
     names = set(re.findall(r"([A-Za-z_]\w*)\s*(?:\([^)\n]*\))?\s+AS\s", code, re.I))

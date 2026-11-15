@@ -162,11 +162,15 @@ HELP = {
     "ABS": ("ABS(x)", "Absolute value (integer or FIXED).", "d = ABS(x - target)"),
     "MIN": ("MIN(a, b)", "The smaller of two numbers.", "x = MIN(x + 3, 144)"),
     "MAX": ("MAX(a, b)", "The larger of two numbers.", "x = MAX(x - 3, 0)"),
-    "INT": ("INT(x)", "A FIXED rounded down to an integer.", "PRINT INT(2.7)   ' 2"),
-    "ROUND": ("ROUND(x)", "A FIXED rounded to the nearest integer.", "PRINT ROUND(2.5)   ' 3"),
-    "SQR": ("SQR(x)", "Square root (FIXED).", "d = SQR(dx * dx + dy * dy)"),
-    "SIN": ("SIN(angle)", "Sine of an angle in radians (FIXED).", "y = 50 + 30 * SIN(a)"),
-    "COS": ("COS(angle)", "Cosine of an angle in radians (FIXED).", "x = 80 + 30 * COS(a)"),
+    "INT": ("INT(x)", "A FIXED or a FLOAT rounded down to an integer.", "PRINT INT(2.7)   ' 2"),
+    "ROUND": ("ROUND(x)", "A FIXED or a FLOAT rounded to the nearest integer.", "PRINT ROUND(2.5)   ' 3"),
+    "SQR": ("SQR(x)", "Square root (FIXED, or FLOAT for a FLOAT).", "d = SQR(dx * dx + dy * dy)"),
+    "SIN": ("SIN(angle)", "Sine of an angle in radians (FIXED, or FLOAT for a FLOAT).", "y = 50 + 30 * SIN(a)"),
+    "COS": ("COS(angle)", "Cosine of an angle in radians (FIXED, or FLOAT for a FLOAT).", "x = 80 + 30 * COS(a)"),
+    "TAN": ("TAN(angle)", "Tangent of an angle in radians (FLOAT).", "h = d * TAN(a)"),
+    "ATN": ("ATN(x)", "Arc tangent, in radians (FLOAT).", "PRINT ATN(1) * 4   ' pi"),
+    "EXP": ("EXP(x)", "e to the power x (FLOAT).", "PRINT EXP(1)   ' 2.718281828459"),
+    "LOG": ("LOG(x)", "Natural logarithm (FLOAT).", "PRINT LOG(10)"),
     "PI": ("PI", "3.14159 (FIXED).", "a = 2 * PI"),
     "ISIN": ("ISIN(angle)", "Integer sine: angle in 1/256 of a turn, result in 1/16384 (fast, no FIXED).",
              "y = ISIN(a) * 30 \\ 16384"),
@@ -185,7 +189,7 @@ HELP = {
     "CHR$": ("CHR$(code)", "The character of a code.", "PRINT CHR$(65)   ' A"),
     "ASC": ("ASC(text)", "The code of the first character.", "PRINT ASC(\"A\")   ' 65"),
     "STR$": ("STR$(number)", "A number as text.", "PRINT \"x=\" + STR$(x)"),
-    "VAL": ("VAL(text)", "The number written in a text (a FIXED: -32768 to 32767).", "n = VAL(\"42\")"),
+    "VAL": ("VAL(text)", "The number written in a text (a FLOAT).", "n = VAL(\"42\")"),
     # ------------------------------------------------------------ types and values
     "INTEGER": ("AS INTEGER", "Whole number, 16 bits: -32768 to 32767.", "DIM x AS INTEGER"),
     "LONG": ("AS LONG", "Whole number, 32 bits: about -2 to 2 billion.", "DIM score AS LONG"),
@@ -193,6 +197,12 @@ HELP = {
     "FIXED": ("AS FIXED", "Decimal number in fixed point: -32768 to 32767.99998, step 1/65536. "
               "Fast (computed with integers); mixed with integers automatically.",
               "DIM speed AS FIXED = 0.75"),
+    "FLOAT": ("AS FLOAT",
+              "Decimal number in floating point, the TI's own (BCD): about 14 significant digits, "
+              "up to 1E999, exact like the TI-Basic (0.1 * 3 = 0.3) but slower than FIXED. A "
+              "FLOAT in a calculation makes it FLOAT; numbers written with a point keep their "
+              "full precision with a FLOAT; 1.5E3 is a FLOAT.",
+              "DIM x AS FLOAT = 3.14159265358979\nPRINT SQR(2.0) * 1E10"),
     "STRING": ("AS STRING [* n]", "Text, up to 255 characters (or n). + joins texts.",
                "DIM name AS STRING * 12"),
     "TRUE": ("TRUE / FALSE", "The values 1 and 0.", "done = FALSE"),

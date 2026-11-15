@@ -41,6 +41,7 @@ static char *b89_gplanes;         /* hidden light + dark planes of SCREEN GRAY4 
 #define b89_gplanes ((char *)0)
 #define B89_LIGHT ((void *)0)
 #define B89_DARK ((void *)0)
+
 #endif
 static short b89_color = 3;       /* COLOR: default colour */
 static unsigned long b89_next_frame;
@@ -81,6 +82,7 @@ B89_FN void b89_leave_gray(void)
     GrayOff();
     b89_gray = 0;
   }
+
 #endif
 }
 
@@ -122,6 +124,7 @@ B89_FN void b89_screen(short gray, short buffered)
     memset(b89_plane(1), 0, LCD_SIZE);
     PortSet(b89_plane(0), 239, 127);
     MoveTo(0, 0);
+
 #endif
   } else if (buffered && !b89_buffer) {
     b89_buffer = malloc(LCD_SIZE);
@@ -991,6 +994,28 @@ B89_FN b89fixed b89_input_fixed(void)
   char b[24];
   b89_input(b, sizeof b);
   return b89_fval(b);
+}
+
+/* ------------------------------------------------------------ FLOAT
+   The TI's floating point (BCD, about 14 significant digits, exponent up to +-999), the
+   float of GCC4TI: exact like the TI-Basic, but slower than FIXED (AMS routines). */
+B89_FN const char *b89_fltstr(float v)      /* text for PRINT / STR$ */
+{
+  static char bufs[4][24];
+  static short k;
+  char *b = bufs[k = (k + 1) & 3];
+  sprintf(b, "%.12g", v);
+  return b;
+}
+
+B89_FN float b89_fmin(float a, float b) { return a < b ? a : b; }
+B89_FN float b89_fmax(float a, float b) { return a > b ? a : b; }
+
+B89_FN float b89_input_float(void)
+{
+  char b[32];
+  b89_input(b, sizeof b);
+  return atof(b);
 }
 
 #endif
