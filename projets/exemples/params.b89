@@ -1,7 +1,7 @@
 ' Parameters - Basic89 example of BYREF, BYVAL and array parameters
 ' A small table of scores: sorted, with statistics, then a name is formatted.
 '
-'   no keyword : numbers by value (a copy), STRING read only, TYPE by reference
+'   no keyword : the caller's variable cannot be changed: numbers copied, STRING and TYPE read only
 '   BYREF      : the SUB works on the caller's variable (it can change it)
 '   BYVAL      : the SUB works on a copy (a STRING can then be changed)
 '   a()        : an array of any size, always by reference; UBOUND(a) is its last index

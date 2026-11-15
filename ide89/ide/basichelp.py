@@ -15,12 +15,14 @@ HELP = {
               "CONST ROWS = 15, COLS = 30\nCONST TITLE = \"Maze\""),
     "TYPE": ("TYPE Name\n  field [(bounds)] AS type\n  ...\nEND TYPE",
              "Defines a record: a group of fields. Fields can be arrays or other TYPEs. A TYPE "
-             "variable is copied with =, and passed to a SUB by reference (the SUB can change it).",
+             "variable is copied with =. Passed to a SUB, it is read only (not copied); BYREF lets "
+             "the SUB change it, BYVAL gives a copy.",
              "TYPE Enemy\n  x AS INTEGER\n  y AS FIXED\n  alive AS BOOLEAN\nEND TYPE\nDIM e(10) AS Enemy\ne(3).x = 40"),
     "SUB": ("SUB name [([BYVAL | BYREF] param [()] AS type, ...)]\n  ...\nEND SUB",
             "Defines a procedure. Call it with its name and its arguments (or CALL name(...)). "
-            "Without keyword, numbers are passed by value, STRINGs read only, TYPEs by reference. "
-            "BYREF: the SUB changes the caller's variable; BYVAL: a copy. a() or a(,) is an "
+            "Without keyword, the SUB cannot change the caller's variable: numbers are copied, "
+            "STRINGs and TYPEs are read only. BYREF: the SUB changes the caller's variable; "
+            "BYVAL: a copy (BYVAL t AS STRING * 20 keeps 20 characters at most). a() or a(,) is an "
             "array parameter (always by reference; UBOUND gives its size). DIM inside a SUB "
             "declares local variables. EXIT SUB leaves it.",
             "SUB box(x AS INTEGER, y AS INTEGER)\n  BOX x, y, x + 9, y + 9 FILL\nEND SUB\nbox 10, 20"),
@@ -35,8 +37,8 @@ HELP = {
               "SUB double(BYREF n AS INTEGER)\n  n = n * 2\nEND SUB\ndouble score"),
     "BYVAL": ("SUB name(BYVAL param AS type)",
               "The parameter is a copy: the SUB can change it, the caller's variable stays the "
-              "same. Numbers are BYVAL without keyword; BYVAL makes a STRING changeable and a "
-              "TYPE copied.",
+              "same. Numbers are BYVAL without keyword; BYVAL makes a STRING or a TYPE changeable "
+              "(a copy). BYVAL t AS STRING * n: the copy keeps n characters at most.",
               "SUB show(BYVAL t AS STRING)\n  t = UCASE$(t)\n  PRINT t\nEND SUB"),
     "UBOUND": ("UBOUND(array [, dimension])",
                "The largest index of an array (of the dimension 1, 2...): mostly used with an "

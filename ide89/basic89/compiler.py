@@ -212,11 +212,12 @@ class Record:
 
 class Param:
     """A parameter of a SUB/FUNCTION. mode: "val" (a copy), "ro" (STRING without
-    keyword: read only, not copied), "copy" (BYVAL STRING: a local copy), "ref" (BYREF,
-    and TYPE without keyword). rank > 0: an array, always by reference."""
+    keyword: read only, not copied), "copy" (BYVAL STRING: a local copy of cap characters),
+    "ref" (BYREF), "ro" also for a TYPE without keyword (read only, passed by address).
+    rank > 0: an array, always by reference."""
 
-    def __init__(self, name, ty, mode, rank=0):
-        self.name, self.ty, self.mode, self.rank = name, ty, mode, rank
+    def __init__(self, name, ty, mode, rank=0, cap=255):
+        self.name, self.ty, self.mode, self.rank, self.cap = name, ty, mode, rank, cap
         self.key = name.lower()
 
 
@@ -300,6 +301,9 @@ class Compiler:
             return self.locals[key]
         if key in self.globals:
             return self.globals[key]
+        if key in self.consts:
+            raise CompileError(line, f"'{name}' is a CONST, not a variable: it cannot be changed "
+                                     "nor passed BYREF (copy it to a variable)")
         raise CompileError(line, f"variable '{name}' is not declared (use DIM {name} AS INTEGER)")
 
     def check_new_name(self, name, line, where):
@@ -555,6 +559,8 @@ class Compiler:
             return f"{self.ctype(ty)} *bv_{n}"
         if pa.mode == "copy":
             return f"const char *b89_in_{n}"
+        if pa.mode == "ro" and is_rec(ty):
+            return f"const {self.ctype(ty)} *bv_{n}"
         c = self.ctype(ty)
         return f"{c}{'' if c.endswith('*') else ' '}bv_{n}"
 
@@ -617,7 +623,8 @@ class Compiler:
             self.locals = {}
             self.prologue = []
             for pa in self.proc.params:
-                v = Var(pa.key, pa.ty, byref=pa.rank > 0 or pa.mode == "ref")
+                v = Var(pa.key, pa.ty, byref=pa.rank > 0 or pa.mode == "ref"
+                        or (pa.mode == "ro" and is_rec(pa.ty)), cap=pa.cap)
                 if pa.rank:
                     v.dims = [None] * pa.rank
                     v.sizes = [f"b89_d{k}_{pa.key}" for k in range(1, pa.rank + 1)]
@@ -625,8 +632,8 @@ class Compiler:
                 elif pa.mode == "ro":
                     v.readonly = True
                 elif pa.mode == "copy":     # BYVAL STRING: a local copy that can be changed
-                    self.prologue.append(f"  char bv_{pa.key}[256]; "
-                                         f"b89_sset(bv_{pa.key}, 256, b89_in_{pa.key});")
+                    self.prologue.append(f"  char bv_{pa.key}[{pa.cap + 1}]; "
+                                         f"b89_sset(bv_{pa.key}, {pa.cap + 1}, b89_in_{pa.key});")
                 self.locals[pa.key] = v
             self.main_tmp_max, self.tmp_max = self.tmp_max, 0
             self.saved_out, self.out = self.out, []
@@ -854,8 +861,8 @@ class Compiler:
             name = p.expect_id()
             target, ty = p.lvalue(name)
             p.end()
+            p.writable(name)
             if ty == "str":
-                p.writable(name)
                 self.emit(line, f"b89_input({target}, sizeof({target}));")
             else:
                 p.num(ty)
@@ -945,9 +952,8 @@ class Compiler:
                 v = p.expect_id()
                 ref, ty = p.lvalue(v, whole=True)
                 lv = self.locals.get(v.val.lower()) if self.proc else None
-                if lv is not None and lv.readonly:
-                    raise CompileError(line, f"{word}: '{v.val}' is a STRING parameter (copy it "
-                                             "to a local STRING variable)")
+                if word == "LOAD":
+                    p.writable(v)
                 refs.append(ref)
             if not refs:
                 raise CompileError(line, f'expected {word} "name", variable, variable...')
@@ -1041,6 +1047,7 @@ class Compiler:
     def for_stmt(self, p, line):
         var_tok = p.expect_id()
         ref, ty = p.lvalue(var_tok)
+        p.writable(var_tok)
         if is_rec(ty) or ty == "str":
             raise CompileError(line, "the FOR counter must be a number")
         p.expect_op("=")
@@ -1132,6 +1139,7 @@ class Compiler:
         if name_tok.val.lower() in self.consts:
             raise CompileError(line, f"'{name_tok.val}' is a CONST, it cannot be changed")
         target, ty = p.lvalue(name_tok)
+        p.writable(name_tok)
         if not p.more():
             raise CompileError(line, f"'{name_tok.val}' alone is not a statement "
                                      "(expected = value, or a SUB name)")
@@ -1142,7 +1150,6 @@ class Compiler:
         p.end()
         if ty == "str" or ety == "str":
             p.same_kind(ty, ety, "=")
-            p.writable(name_tok)
             if op.val not in ("=", "+="):
                 raise CompileError(line, f"{op.val} cannot be used with a STRING (= or +=)")
             fn = "b89_sset" if op.val == "=" else "b89_sappend"
@@ -1207,9 +1214,10 @@ class Parser:
     def type_name(self):
         t = self.next()
         ty = TYPES.get(t.val.upper())
-        self.cap = 255
+        self.cap, self.cap_given = 255, False
         if ty == "str" and self.more() and self.peek().is_("*"):
             self.next()
+            self.cap_given = True
             e, cty = self.add()               # not a whole expression: "= value" may follow
             try:
                 self.cap = int(eval(e.replace("L", "").replace("/", "//"), {"__builtins__": {}}))
@@ -1300,16 +1308,18 @@ class Parser:
             return args
         while True:
             pa = proc.params[len(args)] if len(args) < len(proc.params) else None
-            if pa is not None and (pa.rank or pa.mode == "ref"):
+            if pa is not None and (pa.rank or pa.mode == "ref" or (pa.mode == "ro" and is_rec(pa.ty))):
+                what = ("an array" if pa.rank else "BYREF" if pa.mode == "ref"
+                        else "a TYPE parameter")
                 t = self.next()
                 if t.kind != "id":
-                    raise CompileError(self.line, f"{proc.name}: '{pa.name}' is BYREF or an array: "
+                    raise CompileError(self.line, f"{proc.name}: '{pa.name}' is {what}: "
                                                   "give a variable")
-                if pa.ty == "str" and not pa.rank:
-                    self.writable(t)
                 code, ty = self.lvalue(t, whole=bool(pa.rank))
+                if pa.mode == "ref" or pa.rank:
+                    self.writable(t)
                 if self.more() and not self.peek().is_(",") and not (closer and self.peek().is_(closer)):
-                    raise CompileError(self.line, f"{proc.name}: '{pa.name}' is BYREF: give a "
+                    raise CompileError(self.line, f"{proc.name}: '{pa.name}' is {what}: give a "
                                                   "variable, not a calculation")
                 args.append((code, ty, self.whole, True))
             else:
@@ -1335,6 +1345,11 @@ class Parser:
                                                   "dimension(s), given without index")
                 sizes, strsize = whole
                 out += sizes + ([strsize] if pa.ty == "str" else []) + [self.address(code)]
+            elif pa.mode == "ro" and is_rec(pa.ty):   # TYPE without keyword: its address
+                if ty != pa.ty or whole is not None:
+                    raise CompileError(self.line, f"{proc.name}: '{pa.name}' must be "
+                                                  f"{want}, not {self.c.tname(ty)}")
+                out.append(self.address(code))
             elif pa.mode == "ref":                    # BYREF: the address of the variable
                 if ty != pa.ty:
                     raise CompileError(self.line, f"{proc.name}: '{pa.name}' is BYREF "
@@ -1378,9 +1393,15 @@ class Parser:
     def writable(self, name_tok):
         v = self.c.locals.get(name_tok.val.lower()) if self.c.proc else None
         if v is not None and v.readonly:
-            raise CompileError(self.line, f"'{name_tok.val}' is a STRING parameter: it cannot "
-                                          f"be changed (BYVAL {name_tok.val} AS STRING gives a copy "
-                                          f"that can be changed, BYREF changes the caller's text)")
+            n = name_tok.val
+            if v.ctype == "str":
+                raise CompileError(self.line, f"'{n}' is a STRING parameter: it cannot be changed "
+                                              f"(BYVAL {n} AS STRING gives a copy that can be "
+                                              "changed, BYREF changes the caller's text)")
+            t = self.c.tname(v.ctype)
+            raise CompileError(self.line, f"'{n}' is a {t} parameter, read only: it cannot be "
+                                          f"changed (BYREF {n} AS {t} changes the caller's "
+                                          f"variable, BYVAL {n} AS {t} gives a copy)")
 
     def tmp(self):
         """A temporary string buffer for the current statement."""
@@ -1418,6 +1439,12 @@ class Parser:
                     self.expect_op(")")
                 self.expect_word("AS")
                 ty = self.type_name()
+                cap = self.cap
+                if self.cap_given and (rank or how != "BYVAL"):
+                    raise CompileError(self.line, f"'{n.val}': STRING * n only with BYVAL (a copy "
+                                                  "of n characters at most); otherwise the "
+                                                  "caller's STRING is used, with its own size: "
+                                                  "write AS STRING")
                 if rank:
                     if how == "BYVAL":
                         raise CompileError(self.line, f"'{n.val}()': arrays are always passed "
@@ -1428,10 +1455,10 @@ class Parser:
                 elif how == "BYVAL":
                     mode = "copy" if ty == "str" else "val"
                 else:
-                    mode = "ro" if ty == "str" else "ref" if is_rec(ty) else "val"
+                    mode = "ro" if ty == "str" or is_rec(ty) else "val"
                 if any(pa.key == n.val.lower() for pa in params):
                     raise CompileError(self.line, f"two parameters named '{n.val}'")
-                params.append(Param(n.val, ty, mode, rank))
+                params.append(Param(n.val, ty, mode, rank, cap))
                 if not self.peek().is_(")"):
                     self.expect_op(",")
             self.next()

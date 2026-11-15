@@ -498,6 +498,10 @@ class VariableReader:
         tt = self._strip(target)
         if tt is None:
             return None
+        if tt.tag == "DW_TAG_structure_type" and target.tag == "DW_TAG_const_type":
+            node = self.node(nm, self._type(target), p, path)   # TYPE without keyword
+            node.type_name += " (read only)"
+            return node
         if tt.tag != "DW_TAG_array_type":                 # BYREF number, STRING, TYPE
             node = self.node(nm, target, p, path)
             node.type_name = "BYREF " + node.type_name
