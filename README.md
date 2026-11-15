@@ -61,8 +61,8 @@ so every run starts from a clean state.
 
 ### Ready-to-use Linux package
 
-**[download ti89-ide-linux.tar.gz](https://github.com/JC-Toussaint/ti89-ide/releases/download/linux-v1.2/ti89-ide-linux.tar.gz)**
-([release page](https://github.com/JC-Toussaint/ti89-ide/releases/tag/linux-v1.2)):
+**[download ti89-ide-linux.tar.gz](https://github.com/JC-Toussaint/ti89-ide/releases/download/linux-v1.3/ti89-ide-linux.tar.gz)**
+([release page](https://github.com/JC-Toussaint/ti89-ide/releases/tag/linux-v1.3)):
 x86_64, glibc 2.38 or later (Ubuntu 24.04+, Debian 13+, Fedora 39+...). It contains the
 IDE, the emulator and GCC4TI, with Python and Tk included:
 
@@ -93,8 +93,8 @@ environment variable to it.
 ## Windows
 
 A native Windows version is available as a zip package:
-**[download ti89-ide-windows.zip](https://github.com/JC-Toussaint/ti89-ide/releases/download/windows-v1.2/ti89-ide-windows.zip)**
-([release page](https://github.com/JC-Toussaint/ti89-ide/releases/tag/windows-v1.2)).
+**[download ti89-ide-windows.zip](https://github.com/JC-Toussaint/ti89-ide/releases/download/windows-v1.3/ti89-ide-windows.zip)**
+([release page](https://github.com/JC-Toussaint/ti89-ide/releases/tag/windows-v1.3)).
 Unzip it, put your ROM in the
 `ROM` folder, and start `ti89-ide.exe` (no Python, no WSL needed). It contains the IDE,
 the emulator and a Windows build of GCC4TI whose output is identical, byte for byte, to
