@@ -87,6 +87,9 @@ class VariableReader:
         self.dw = self.info.dwarf
         self._cus = list(self.dw.iter_CUs())
         self._loclists = self.dw.location_lists()
+        # Program translated from Basic89 (prog.b89.c): types shown as in Basic
+        self.basic = any((cu.get_top_DIE().attributes.get("DW_AT_name") or
+                          type("", (), {"value": b""})).value.endswith(b".b89.c") for cu in self._cus)
 
     # ------------------------------------------------------------ mémoire
     @property
@@ -178,6 +181,13 @@ class VariableReader:
         if tag == "DW_TAG_volatile_type":
             return "volatile " + self.type_name(self._type(t))
         if tag == "DW_TAG_array_type":
+            if self.basic:
+                dims = self._dims(t)
+                et = self._strip(self._type(t))
+                if et is not None and et.tag == "DW_TAG_base_type" and self._size(et) == 1:
+                    sub = f"({', '.join(str(d - 1) for d in dims[:-1])})" if len(dims) > 1 else ""
+                    return f"STRING * {dims[-1] - 1}{sub}"      # char[...][256]
+                return f"{self.type_name(self._type(t))}({', '.join(str(d - 1) for d in dims)})"
             return self.type_name(self._type(t)) + "".join(f"[{d}]" for d in self._dims(t))
         if n:
             name = n.value.decode("latin-1")
@@ -185,6 +195,10 @@ class VariableReader:
                 return name[3:]
             if name == "b89fixed":
                 return "FIXED"
+            if name == "b89bool":
+                return "BOOLEAN"
+            if self.basic and tag == "DW_TAG_base_type":
+                return {"short int": "INTEGER", "long int": "LONG"}.get(name, name)
             prefix = {"DW_TAG_structure_type": "struct ", "DW_TAG_union_type": "union ",
                       "DW_TAG_enumeration_type": "enum "}.get(tag, "")
             return prefix + name
@@ -236,6 +250,13 @@ class VariableReader:
         else:
             data = None
             where = None
+        if t is not None and t.tag == "DW_TAG_typedef" and \
+                t.attributes.get("DW_AT_name") and t.attributes["DW_AT_name"].value == b"b89bool":
+            b = data if data is not None else self.read(addr, 2)
+            if b is None:
+                return VarNode(name, tn, f"‹address ${addr:06X} is not readable›", path, error=True)
+            v = int.from_bytes(b[-2:], "big", signed=True)
+            return VarNode(name, tn, "FALSE" if v == 0 else "TRUE" if v in (1, -1) else f"TRUE ({v})", path)
         if t is not None and t.tag == "DW_TAG_typedef" and \
                 t.attributes.get("DW_AT_name") and t.attributes["DW_AT_name"].value == b"b89fixed":
             # FIXED of a Basic89 program: a long holding value * 65536
@@ -325,8 +346,7 @@ class VariableReader:
                 for k in range(min(count, MAX_ARRAY)):
                     a = base + k * esize
                     if len(dims) > 1:
-                        out.append(VarNode(f"[{k}]", "", f"[{dims[1]}]", f"{path}/{k}",
-                                           lambda a=a, k=k: self._subarray(elem, dims[1:], a, f"{path}/{k}")))
+                        out.append(self._row_node(f"[{k}]", elem, dims[1:], a, f"{path}/{k}"))
                     else:
                         out.append(self.node(f"[{k}]", elem, a, f"{path}/{k}"))
                 if count > MAX_ARRAY:
@@ -366,6 +386,18 @@ class VariableReader:
             return VarNode(name, tn, summary, path, kids)
         return VarNode(name, tn, f"‹unsupported type {tag[7:]}›", path, error=True)
 
+    def _row_node(self, name, elem, sub, addr, path):
+        """Element of an array with several dimensions: a text if it is the last
+        dimension of a char array (a STRING of an array of STRINGs), else a sub-array."""
+        et = self._strip(elem)
+        if len(sub) == 1 and et is not None and et.tag == "DW_TAG_base_type" and self._size(et) == 1:
+            raw = self.read(addr, sub[0])
+            txt = '"' + raw.split(b"\0")[0].decode("latin-1") + '"' if raw else "‹unreadable›"
+            tn = f"STRING * {sub[0] - 1}" if self.basic else f"char[{sub[0]}]"
+            return VarNode(name, tn, txt, path)
+        return VarNode(name, "", f"[{sub[0]}]", path,
+                       lambda: self._subarray(elem, sub, addr, path))
+
     def _subarray(self, elem, dims, addr, path):
         esize = self._size(elem)
         stride = esize
@@ -373,12 +405,18 @@ class VariableReader:
             stride *= d
         out = []
         for k in range(min(dims[0], MAX_ARRAY)):
-            if len(dims) > 1:
+            if len(dims) > 2 or (len(dims) == 2 and self._row_is_text(elem, dims[1:])):
+                out.append(self._row_node(f"[{k}]", elem, dims[1:], addr + k * stride, f"{path}/{k}"))
+            elif len(dims) > 1:
                 out.append(VarNode(f"[{k}]", "", f"[{dims[1]}]", f"{path}/{k}",
                                    lambda a=addr + k * stride, k=k: self._subarray(elem, dims[1:], a, f"{path}/{k}")))
             else:
                 out.append(self.node(f"[{k}]", elem, addr + k * esize, f"{path}/{k}"))
         return out
+
+    def _row_is_text(self, elem, sub):
+        et = self._strip(elem)
+        return len(sub) == 1 and et is not None and et.tag == "DW_TAG_base_type" and self._size(et) == 1
 
     # ------------------------------------------------------------ portées
     def _function_die(self, off):

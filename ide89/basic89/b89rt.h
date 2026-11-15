@@ -7,6 +7,8 @@
 #define SAVE_SCREEN
 #include <tigcclib.h>
 
+typedef short b89bool;            /* BOOLEAN (shown TRUE / FALSE by the debugger) */
+
 /* a program uses only some of these functions: no "defined but not used" warnings */
 #define B89_FN static __attribute__((unused))
 

@@ -85,7 +85,7 @@ UNTIL WAITFRAME WAITKEY WEND WHILE BUFFERED DIRECT SELECT IS TYPE INPUT INCLUDE 
 IMAGE SPRITE TILESET MAP MAPROW SOUND PLAY BEEP SAVE LOAD KILL
 """.split())
 
-TYPES = {"INTEGER": "short", "LONG": "long", "BOOLEAN": "short", "FIXED": "fixed",
+TYPES = {"INTEGER": "short", "LONG": "long", "BOOLEAN": "bool", "FIXED": "fixed",
          "STRING": "str"}
 STR_FUNCS = {"LEFT$", "RIGHT$", "MID$", "STR$", "CHR$", "UCASE$", "LCASE$", "LEN", "ASC",
              "INSTR", "VAL"}
@@ -112,7 +112,7 @@ BUILTINS = {
 }
 
 
-# Types: "short" (INTEGER, BOOLEAN), "long" (LONG), "fixed" (FIXED: 16.16 fixed point,
+# Types: "short" (INTEGER), "bool" (BOOLEAN, a short), "long" (LONG), "fixed" (FIXED: 16.16 fixed point,
 # a long holding value * 65536), "rec:<name>" (a TYPE ... END TYPE)
 def is_rec(ty):
     return ty.startswith("rec:")
@@ -137,7 +137,7 @@ def fixed_literal(text, line):
 
 
 def basic_type(ty):
-    return ty[4:] if is_rec(ty) else {"short": "INTEGER", "long": "LONG",
+    return ty[4:] if is_rec(ty) else {"short": "INTEGER", "long": "LONG", "bool": "BOOLEAN",
                                       "fixed": "FIXED", "str": "STRING"}.get(ty, ty)
 
 
@@ -266,6 +266,8 @@ class Compiler:
             return "const char *"
         if ty == "fixed":
             return "b89fixed"
+        if ty == "bool":
+            return "b89bool"            # a short, shown TRUE / FALSE by the debugger
         return f"bt_{self.records[ty[4:]].display}" if is_rec(ty) else ty
 
     def tname(self, ty):
